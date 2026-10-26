@@ -46,3 +46,14 @@ window.RUBICK = {
     return Array.from(bytes, (b) => this.CODE_CHARS[b % this.CODE_CHARS.length]).join('');
   },
 };
+
+// Screen-side game registry. Each file in js/games/ registers one game:
+//   RubickGames.register({ id, name, blurb, create(hub) -> instance })
+// An instance can implement any of:
+//   start(), stop(), join(p), leave(p), press(p, bits), update(dt),
+//   draw(ctx, timeMs), resize(), meta(p) -> roster text, hint(p) -> phone text
+window.RubickGames = {
+  list: [],
+  register(game) { this.list.push(game); },
+  get(id) { return this.list.find((g) => g.id === id); },
+};

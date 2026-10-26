@@ -147,6 +147,9 @@
       case 'score':
         $('#meScore').textContent = '★ ' + msg.score;
         break;
+      case 'hint':
+        $('#hint').textContent = String(msg.text || '').slice(0, 60);
+        break;
       case 'full':
         leaving = true;
         onDropped('');

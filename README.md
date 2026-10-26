@@ -6,9 +6,16 @@ Turn your phone into a game controller. The laptop shows the game, phones join w
 
 1. Open the site on the laptop (`index.html`). It shows a room code and a QR code.
 2. On your phone, scan the QR code or open `controller.html` and type the code.
-3. Turn the phone sideways. Left stick or d-pad moves, **A** dashes, **B** honks. Grab the coins.
+3. Turn the phone sideways and play. Friends scan the same QR code to join (up to 8).
 
-No phone? On the laptop, `WASD` moves, `Space` dashes, `E` honks.
+Pick the game in the panel on the laptop. Switching games keeps everyone connected.
+
+| Game | How to play |
+| --- | --- |
+| **Snake** | Everyone presses **A** to ready up. Steer with stick or d-pad, eat white apples to grow. Hit a wall or any snake and you're out; your body turns into pellets. Last snake standing wins. |
+| **Arena** | Free roam. Grab coins, **A** dashes (and knocks friends back), **B** honks. |
+
+No phone? On the laptop, `WASD` moves, `Space` is A, `E` is B, `H` hides the panel.
 
 ## How it connects
 
@@ -31,7 +38,8 @@ Add `?peer=host:port` to the screen URL to use your own [PeerJS server](https://
 
 | Path | What |
 | --- | --- |
-| `index.html`, `js/screen.js`, `css/screen.css` | Laptop screen: room, QR, arena game |
+| `index.html`, `js/screen.js`, `css/screen.css` | Laptop hub: room, QR, roster, game switching |
+| `js/games/*.js` | One file per game (see the interface in `js/common.js`) |
 | `controller.html`, `js/controller.js`, `css/controller.css` | Phone gamepad |
 | `js/common.js` | Shared constants, button bitmask, PeerJS options |
 | `vendor/` | PeerJS 1.5.5 and qrcode-generator 2.0.4 (MIT) |
@@ -39,6 +47,6 @@ Add `?peer=host:port` to the screen URL to use your own [PeerJS server](https://
 ## Message format
 
 Phone → screen: `{t:'in', x, y, b}` (stick −1..1, button bitmask), `{t:'ping', ts}`, `{t:'rtt', ms}`
-Screen → phone: `{t:'welcome', slot, color, name}`, `{t:'pong', ts}`, `{t:'rumble', ms}`, `{t:'score', score}`, `{t:'full'}`
+Screen → phone: `{t:'welcome', slot, color, name}`, `{t:'pong', ts}`, `{t:'rumble', ms}`, `{t:'hint', text}`, `{t:'full'}`
 
 Buttons: A, B, X, Y, LB, RB, View, Menu, Up, Down, Left, Right = bits 0–11.

@@ -21,6 +21,9 @@
     </header>
 
     <div class="lobby-body">
+      <div id="games" class="games" role="group" aria-label="Game"></div>
+      <p id="gameBlurb" class="blurb"></p>
+
       <p class="step">Scan to join on your phone</p>
       <div id="qr" class="qr" aria-label="QR code to join"></div>
 
@@ -35,7 +38,7 @@
 
       <ul id="roster" class="roster"></ul>
 
-      <p class="hint">No phone handy? <kbd>WASD</kbd> moves, <kbd>Space</kbd> dashes, <kbd>E</kbd> honks.</p>
+      <p class="hint">No phone handy? <kbd>WASD</kbd> moves, <kbd>Space</kbd> is A, <kbd>E</kbd> is B. <kbd>H</kbd> hides this panel.</p>
     </div>
   </aside>
 
@@ -44,6 +47,8 @@
   <script src="vendor/peerjs.min.js"></script>
   <script src="vendor/qrcode.js"></script>
   <script src="js/common.js"></script>
+  <script src="js/games/arena.js"></script>
+  <script src="js/games/snake.js"></script>
   <script src="js/screen.js"></script>
 </body>
 </html>
