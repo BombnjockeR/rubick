@@ -5,6 +5,7 @@
   const R = window.RUBICK;
   const B = R.BTN;
   const $ = (s) => document.querySelector(s);
+  const setAll = (sel, text) => { for (const el of document.querySelectorAll(sel)) el.textContent = text; };
 
   const state = { x: 0, y: 0, b: 0 };
   let peer = null;
@@ -15,6 +16,7 @@
   let lastSentAt = 0;
   let pingTimer = null;
   let wakeLock = null;
+  let mode = 'pad'; // 'pad' or 'motion', chosen by the game on the screen
 
   // ---------- Storage (may be unavailable in private mode) ----------
   const store = {
@@ -105,8 +107,7 @@
     joinBtn.disabled = false;
     setMsg('');
     $('#join').hidden = true;
-    $('#pad').hidden = false;
-    checkOrientation();
+    showMode();
     requestWakeLock();
     resetStick();
     pingTimer = setInterval(() => sendRaw({ t: 'ping', ts: performance.now() }), 1000);
@@ -119,7 +120,9 @@
     teardown();
     releaseAll();
     $('#pad').hidden = true;
+    $('#motion').hidden = true;
     $('#rotate').hidden = true;
+    mode = 'pad';
     $('#join').hidden = false;
     setMsg(wasLeaving ? '' : text + ' Tap Join to reconnect.', !wasLeaving);
     releaseWakeLock();
@@ -131,13 +134,13 @@
     switch (msg.t) {
       case 'welcome':
         document.documentElement.style.setProperty('--me', msg.color);
-        $('#meName').textContent = msg.name || 'Player';
-        $('#meScore').textContent = '';
+        setAll('.js-name', msg.name || 'Player');
+        setAll('.js-score', '');
         haptic([30, 40, 30]);
         break;
       case 'pong': {
         const rtt = Math.round(performance.now() - msg.ts);
-        $('#ping').textContent = rtt + 'ms';
+        setAll('.js-ping', rtt + 'ms');
         sendRaw({ t: 'rtt', ms: rtt });
         break;
       }
@@ -145,10 +148,14 @@
         haptic(Math.max(5, Math.min(400, msg.ms | 0)));
         break;
       case 'score':
-        $('#meScore').textContent = '★ ' + msg.score;
+        setAll('.js-score', '★ ' + msg.score);
         break;
       case 'hint':
-        $('#hint').textContent = String(msg.text || '').slice(0, 60);
+        setAll('.js-hint', String(msg.text || '').slice(0, 60));
+        break;
+      case 'mode':
+        mode = msg.mode === 'motion' ? 'motion' : 'pad';
+        if (connected) showMode();
         break;
       case 'full':
         leaving = true;
@@ -179,10 +186,26 @@
   (function loop() { flush(); requestAnimationFrame(loop); })();
   setInterval(() => flush(), 100);
 
-  $('#leaveBtn').addEventListener('click', () => {
-    leaving = true;
-    onDropped('');
-  });
+  for (const btn of document.querySelectorAll('.js-leave')) {
+    btn.addEventListener('click', () => {
+      leaving = true;
+      onDropped('');
+    });
+  }
+
+  function showMode() {
+    releaseAll();
+    $('#pad').hidden = mode !== 'pad';
+    $('#motion').hidden = mode !== 'motion';
+    checkOrientation();
+    // Motion games are played holding the phone upright; the pad wants landscape.
+    try {
+      const o = screen.orientation;
+      if (o && mode === 'motion' && o.unlock) o.unlock();
+      else if (o && o.lock && document.fullscreenElement) o.lock('landscape').catch(() => {});
+    } catch (_) {}
+    if (mode === 'motion') Motion.prepare();
+  }
 
   // ---------- Stick ----------
   const zone = $('#stickZone');
@@ -329,7 +352,7 @@
 
   const portrait = window.matchMedia('(orientation: portrait)');
   function checkOrientation() {
-    $('#rotate').hidden = !(connected && portrait.matches);
+    $('#rotate').hidden = !(connected && mode === 'pad' && portrait.matches);
   }
   portrait.addEventListener('change', () => { releaseAll(); checkOrientation(); });
 
@@ -337,6 +360,120 @@
   document.addEventListener('contextmenu', (e) => e.preventDefault());
   document.addEventListener('gesturestart', (e) => e.preventDefault());
   document.addEventListener('dblclick', (e) => e.preventDefault());
+
+  // ---------- Motion (swing detection) ----------
+  // A swing is a burst of rotation (gyroscope) or linear acceleration.
+  // When either crosses a threshold we watch ~70ms for the peak, then send
+  // {t:'swing', power 0..1} to the screen. Timing is judged on the screen.
+  const Motion = (() => {
+    const GYRO_TH = 260;     // deg/s that counts as a swing
+    const ACC_TH = 14;       // m/s² of linear acceleration that counts as a swing
+    const GYRO_FULL = 1100;  // deg/s for a full-power swing
+    const ACC_FULL = 32;     // m/s² for a full-power swing
+    const PEAK_WINDOW = 70;  // ms to look for the peak after the swing starts
+    const COOLDOWN = 380;    // ms before another swing can register
+
+    const meter = $('#mMeter');
+    const paddle = $('#mPaddle');
+    const status = $('#mStatus');
+    const btn = $('#motionBtn');
+    let listening = false, gotData = false;
+    let swinging = false, swingStart = 0, peak = 0, coolUntil = 0, level = 0;
+
+    const needsPermission = () =>
+      typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function';
+
+    function prepare() {
+      if (listening) return;
+      if (typeof DeviceMotionEvent === 'undefined') {
+        status.textContent = 'No motion sensor here — use the tap area below';
+        return;
+      }
+      if (needsPermission()) {
+        // iPhone: must be asked from a tap.
+        btn.hidden = false;
+        status.textContent = 'Tap “Enable motion” so the game can feel your swing';
+        return;
+      }
+      start();
+    }
+
+    function start() {
+      window.addEventListener('devicemotion', onMotion);
+      listening = true;
+      btn.hidden = true;
+      status.textContent = 'Hold your phone like a paddle and swing';
+      setTimeout(() => {
+        if (!gotData) status.textContent = 'No motion data from this device — use the tap area below';
+      }, 2500);
+    }
+
+    btn.addEventListener('click', async () => {
+      try {
+        const res = await DeviceMotionEvent.requestPermission();
+        if (res === 'granted') start();
+        else status.textContent = 'Motion was blocked — use the tap area, or allow it in Safari settings';
+      } catch (_) {
+        status.textContent = 'Couldn’t turn on motion — use the tap area below';
+      }
+    });
+
+    function onMotion(e) {
+      const r = e.rotationRate, a = e.acceleration, g = e.accelerationIncludingGravity;
+      let gyro = 0, acc = 0;
+      if (r && r.alpha != null) gyro = Math.hypot(r.alpha, r.beta || 0, r.gamma || 0);
+      if (a && a.x != null) acc = Math.hypot(a.x, a.y || 0, a.z || 0);
+      else if (g && g.x != null) acc = Math.abs(Math.hypot(g.x, g.y || 0, g.z || 0) - 9.81);
+      if (r && r.alpha != null) gotData = true;
+      if (a && a.x != null) gotData = true;
+      feed(gyro, acc);
+    }
+
+    function feed(gyro, acc) {
+      const now = performance.now();
+      const strength = Math.max(gyro / GYRO_FULL, acc / ACC_FULL);
+      level = Math.max(level, strength);
+      if (mode !== 'motion' || !connected) return;
+      if (!swinging && now >= coolUntil && (gyro > GYRO_TH || acc > ACC_TH)) {
+        swinging = true;
+        swingStart = now;
+        peak = strength;
+      }
+      if (swinging) {
+        peak = Math.max(peak, strength);
+        if (now - swingStart >= PEAK_WINDOW) {
+          swinging = false;
+          coolUntil = now + COOLDOWN;
+          fire(Math.min(1, Math.max(0.15, (peak - 0.2) / 0.8)));
+        }
+      }
+    }
+
+    function fire(power) {
+      if (!connected) return;
+      sendRaw({ t: 'swing', power: Math.round(power * 100) / 100 });
+      haptic(12);
+      paddle.classList.remove('swing');
+      void paddle.offsetWidth; // restart the animation
+      paddle.classList.add('swing');
+      setTimeout(() => paddle.classList.remove('swing'), 220);
+    }
+
+    (function animate() {
+      meter.style.width = Math.min(100, level * 100).toFixed(0) + '%';
+      level *= 0.93;
+      requestAnimationFrame(animate);
+    })();
+
+    $('#tapSwing').addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      level = 0.6;
+      fire(0.6);
+    });
+
+    return { prepare, feed };
+  })();
+  window.__motion = Motion; // lets tests inject fake sensor readings
 
   if (codeInput.value) nameInput.focus();
 })();

@@ -13,6 +13,7 @@ Pick the game in the panel on the laptop. Switching games keeps everyone connect
 | Game | How to play |
 | --- | --- |
 | **Snake** | Everyone presses **A** to ready up. Steer with stick or d-pad, eat white apples to grow. Hit a wall or any snake and you're out; your body turns into pellets. Last snake standing wins. |
+| **Table Tennis** | Motion controls: hold your phone like a paddle and swing. Your paddle follows the ball; *when* you swing aims it (early = to your left, late = to your right, way off = out), *how hard* sets the speed. First to 5. Solo players face the CPU; a second player takes its place. |
 | **Arena** | Free roam. Grab coins, **A** dashes (and knocks friends back), **B** honks. |
 
 No phone? On the laptop, `WASD` moves, `Space` is A, `E` is B, `H` hides the panel.
@@ -46,7 +47,11 @@ Add `?peer=host:port` to the screen URL to use your own [PeerJS server](https://
 
 ## Message format
 
-Phone → screen: `{t:'in', x, y, b}` (stick −1..1, button bitmask), `{t:'ping', ts}`, `{t:'rtt', ms}`
-Screen → phone: `{t:'welcome', slot, color, name}`, `{t:'pong', ts}`, `{t:'rumble', ms}`, `{t:'hint', text}`, `{t:'full'}`
+Phone → screen: `{t:'in', x, y, b}` (stick −1..1, button bitmask), `{t:'swing', power}` (motion, 0..1), `{t:'ping', ts}`, `{t:'rtt', ms}`
+Screen → phone: `{t:'welcome', slot, color, name}`, `{t:'mode', mode}` (`'pad'` or `'motion'`), `{t:'pong', ts}`, `{t:'rumble', ms}`, `{t:'hint', text}`, `{t:'full'}`
+
+### Motion controls
+
+Each game declares `controls: 'pad' | 'motion'`; the phone switches screens automatically. In motion mode the phone reads the gyroscope (`devicemotion` rotation rate) and linear acceleration. A swing starts when rotation passes 260°/s or acceleration passes 14 m/s²; the phone takes the peak over the next 70 ms and sends `{t:'swing', power}`. Timing is judged on the laptop. iPhones ask for motion permission once (the "Enable motion" button), which needs HTTPS — GitHub Pages provides it. Phones without sensors get a tap-to-swing area.
 
 Buttons: A, B, X, Y, LB, RB, View, Menu, Up, Down, Left, Right = bits 0–11.

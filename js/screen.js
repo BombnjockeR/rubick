@@ -195,6 +195,7 @@
       }
       const p = addPlayer(conn.peer, slot, conn.metadata && conn.metadata.name, conn);
       hub.send(p, { t: 'welcome', slot, color: p.color, colorName: p.colorName, name: p.name, code });
+      hub.send(p, { t: 'mode', mode: controlMode() });
     });
     conn.on('data', (msg) => onMessage(conn.peer, msg));
     conn.on('close', () => removePlayer(conn.peer));
@@ -208,10 +209,16 @@
       case 'in': applyInput(p, msg.x, msg.y, msg.b); break;
       case 'ping': hub.send(p, { t: 'pong', ts: msg.ts }); break;
       case 'rtt': p.rtt = Math.round(Number(msg.ms) || 0); break;
+      case 'swing':
+        if (game && game.swing) game.swing(p, Math.max(0, Math.min(1, Number(msg.power) || 0)));
+        break;
     }
   }
 
   // ---------- Games ----------
+  // 'pad' = Xbox-style gamepad, 'motion' = hold the phone like a paddle and swing.
+  const controlMode = () => (gameDef && gameDef.controls) || 'pad';
+
   function setGame(id) {
     const def = window.RubickGames.get(id) || window.RubickGames.list[0];
     if (game && game.stop) game.stop();
@@ -219,7 +226,10 @@
     game = def.create(hub);
     if (game.start) game.start();
     if (game.join) for (const p of hub.players.values()) game.join(p);
-    for (const p of hub.players.values()) p.hintSent = null;
+    for (const p of hub.players.values()) {
+      p.hintSent = null;
+      hub.send(p, { t: 'mode', mode: controlMode() });
+    }
     for (const btn of document.querySelectorAll('#games button')) {
       btn.setAttribute('aria-pressed', String(btn.dataset.game === def.id));
     }

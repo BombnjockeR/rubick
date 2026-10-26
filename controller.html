@@ -40,11 +40,11 @@
       <button class="bumper" data-btn="LB">LB</button>
       <div class="status">
         <span id="meDot" class="me-dot"></span>
-        <span id="meName" class="me-name">…</span>
-        <span id="meScore" class="me-score"></span>
-        <span id="ping" class="ping">–</span>
+        <span id="meName" class="me-name js-name">…</span>
+        <span id="meScore" class="me-score js-score"></span>
+        <span id="ping" class="ping js-ping">–</span>
         <button id="fsBtn" class="icon" title="Fullscreen" aria-label="Fullscreen">⛶</button>
-        <button id="leaveBtn" class="icon" title="Leave" aria-label="Leave">✕</button>
+        <button id="leaveBtn" class="icon js-leave" title="Leave" aria-label="Leave">✕</button>
       </div>
       <button class="bumper" data-btn="RB">RB</button>
     </div>
@@ -56,7 +56,7 @@
     </div>
 
     <div class="center">
-      <p id="hint" class="hint" aria-live="polite"></p>
+      <p id="hint" class="hint js-hint" aria-live="polite"></p>
       <div class="sys">
         <button class="sys-btn" data-btn="VIEW" aria-label="View">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="7" width="11" height="9" rx="1.5"/><rect x="9" y="4" width="11" height="9" rx="1.5"/></svg>
@@ -81,6 +81,30 @@
       <button class="fb b" data-btn="B">B</button>
       <button class="fb a" data-btn="A">A</button>
     </div>
+  </main>
+
+  <!-- Motion controller (Table Tennis etc.): hold the phone like a paddle -->
+  <main id="motion" class="motion" hidden>
+    <header class="m-head">
+      <span class="me-dot"></span>
+      <span class="me-name js-name">…</span>
+      <span class="me-score js-score"></span>
+      <span class="ping js-ping">–</span>
+      <button class="icon js-leave" title="Leave" aria-label="Leave">✕</button>
+    </header>
+
+    <p class="m-hint js-hint" aria-live="polite"></p>
+
+    <div id="mPaddle" class="m-paddle" aria-hidden="true">
+      <div class="blade"></div>
+      <div class="handle"></div>
+    </div>
+
+    <div class="m-meter" aria-hidden="true"><div id="mMeter" class="m-fill"></div></div>
+    <p id="mStatus" class="m-status">Hold your phone like a paddle and swing</p>
+
+    <button id="motionBtn" class="m-enable" hidden>Enable motion</button>
+    <button id="tapSwing" class="m-tap">No motion sensor? Tap here to swing</button>
   </main>
 
   <div id="rotate" class="rotate" hidden>

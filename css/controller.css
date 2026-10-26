@@ -388,3 +388,114 @@ input:focus { border-color: color-mix(in srgb, var(--me) 70%, transparent); }
   0%, 25% { transform: rotate(0deg); }
   55%, 100% { transform: rotate(-90deg); }
 }
+
+/* ---------- Motion controller ---------- */
+
+.motion {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding:
+    max(14px, env(safe-area-inset-top))
+    max(18px, env(safe-area-inset-right))
+    max(18px, env(safe-area-inset-bottom))
+    max(18px, env(safe-area-inset-left));
+  background:
+    radial-gradient(80% 60% at 50% 45%, color-mix(in srgb, var(--me) 14%, transparent) 0%, transparent 70%),
+    var(--bg);
+  touch-action: none;
+}
+
+.m-head {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+}
+.m-head .me-name { max-width: 40vw; }
+.m-head .ping { margin-left: auto; }
+
+.m-hint {
+  margin: 0;
+  min-height: 2.6em;
+  text-align: center;
+  font-size: clamp(16px, 4.6vmin, 22px);
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.m-paddle {
+  position: relative;
+  width: min(46vmin, 220px);
+  aspect-ratio: 0.72;
+  transform-origin: 50% 85%;
+  transition: transform 160ms cubic-bezier(.3,1.6,.5,1);
+}
+.m-paddle .blade {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, color-mix(in srgb, var(--me) 85%, white) 0%, var(--me) 55%, color-mix(in srgb, var(--me) 70%, black) 100%);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5), 0 0 50px color-mix(in srgb, var(--me) 35%, transparent);
+}
+.m-paddle .handle {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 22%;
+  height: 34%;
+  transform: translateX(-50%);
+  border-radius: 10px 10px 14px 14px;
+  background: linear-gradient(90deg, #6b4a2f, #a0744b 50%, #6b4a2f);
+}
+.m-paddle.swing { transform: rotate(-28deg) scale(1.06); }
+
+.m-meter {
+  width: min(70vw, 320px);
+  height: 10px;
+  border-radius: 999px;
+  background: var(--shell-2);
+  overflow: hidden;
+}
+.m-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: var(--me);
+  transition: width 60ms linear;
+}
+
+.m-status {
+  margin: 0;
+  text-align: center;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.m-enable {
+  background: var(--me);
+  color: #0c0d10;
+  font-weight: 800;
+  font-size: 18px;
+  border-radius: 14px;
+  padding: 14px 26px;
+  touch-action: manipulation;
+}
+.m-tap {
+  align-self: stretch;
+  min-height: 64px;
+  border-radius: 16px;
+  border: 1px dashed var(--line);
+  color: var(--muted);
+  font-size: 14px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.m-tap:active { background: rgba(255, 255, 255, 0.08); color: var(--text); }
