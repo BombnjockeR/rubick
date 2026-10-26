@@ -163,10 +163,11 @@
     document.title = `Rubick — ${code}`;
   }
 
-  function startHost() {
+  async function startHost() {
     code = R.makeCode();
     setStatus('Opening room…');
-    peer = new Peer(R.PREFIX + code, R.peerOptions);
+    const opts = await R.peerOptionsAsync(); // includes relay servers for far-away players
+    peer = new Peer(R.PREFIX + code, opts);
 
     peer.on('open', () => { showRoom(); updateStatus(); });
     peer.on('connection', onConnection);

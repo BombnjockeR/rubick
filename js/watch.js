@@ -41,7 +41,7 @@
     lastBeat = 0;
   }
 
-  function watch(c) {
+  async function watch(c) {
     teardown();
     leaving = false;
     code = c;
@@ -57,9 +57,11 @@
       joinBtn.disabled = false;
       showJoin(text, true);
     };
-    const timer = setTimeout(() => fail('Couldn’t reach that room. Is the host’s screen still open?'), 15000);
+    const timer = setTimeout(() => fail('Found the room, but couldn’t connect from this network. Try another network, or check the host’s screen is still open.'), 20000);
 
-    peer = new Peer(R.peerOptions);
+    const opts = await R.peerOptionsAsync();
+    if (settled) return;
+    peer = new Peer(opts);
 
     // The host calls us back with the game video.
     peer.on('call', (incoming) => {

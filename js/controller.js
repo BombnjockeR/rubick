@@ -62,7 +62,7 @@
     peer = null;
   }
 
-  function join(code, name) {
+  async function join(code, name) {
     teardown();
     leaving = false;
     joinBtn.disabled = true;
@@ -77,9 +77,13 @@
       joinBtn.disabled = false;
       setMsg(text, true);
     };
-    const timer = setTimeout(() => fail('Couldn’t reach that room. Is the screen page still open?'), 15000);
+    // If the room didn't exist we'd get 'peer-unavailable' within a second or
+    // two, so a timeout means we found the room but the network blocked the link.
+    const timer = setTimeout(() => fail('Found the room, but couldn’t connect from this network. Try switching between Wi-Fi and mobile data, or check the screen is still open.'), 20000);
 
-    peer = new Peer(R.peerOptions);
+    const opts = await R.peerOptionsAsync();
+    if (settled) return;
+    peer = new Peer(opts);
 
     peer.on('open', () => {
       conn = peer.connect(R.PREFIX + code, { reliable: true, metadata: { name, remote: isRemote } });

@@ -39,6 +39,14 @@ phone (controller.html) ──WebRTC data channel──▶ laptop (index.html)
 - Room code `ABCD` is the laptop's PeerJS id `rubick-v1-ABCD`.
 - Up to 8 controllers per room. Phones get a short vibration on dash, coin pickup and bumps (Android only; iOS Safari doesn't support vibration).
 
+### Relays for players on other networks
+
+On the same Wi-Fi, phone and laptop connect directly. Across the internet, many networks (mobile carriers with CGNAT especially) block direct links, so the connection needs a **TURN relay**. Set `TURN_URL` in `js/common.js` to a Metered credentials URL and every page fetches short-lived relay credentials (ports 80/443 over UDP, TCP and TLS) before connecting. WebRTC still uses a direct link whenever it can and only relays when it must. If `TURN_URL` is empty or unreachable, PeerJS's built-in servers are used.
+
+To test the relay at home, add `&relay=1` to a controller or watch URL to force all traffic through it.
+
+The Metered free plan includes 20 GB/month. Controller input is tiny; a relayed remote-screen video uses about 1 GB per hour per viewer.
+
 ### Self-hosting the lobby
 
 Add `?peer=host:port` to the screen URL to use your own [PeerJS server](https://github.com/peers/peerjs-server) instead of the public one. The QR code passes it along to phones automatically.

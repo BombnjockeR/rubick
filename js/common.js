@@ -18,8 +18,6 @@ window.RUBICK = {
     UP: 1 << 8, DOWN: 1 << 9, LEFT: 1 << 10, RIGHT: 1 << 11,
   },
 
-  // PeerJS defaults already include Google STUN + PeerJS's public TURN
-  // relay, which helps when phone and laptop are on different networks.
   // Add ?peer=host:port to the URL to use your own PeerJS server instead
   // of the free public one (handy for local testing or self-hosting).
   peerServer: new URLSearchParams(location.search).get('peer') || '',
@@ -29,6 +27,52 @@ window.RUBICK = {
       const [host, port] = this.peerServer.split(':');
       const local = /^(localhost|127\.|10\.|192\.168\.)/.test(host);
       Object.assign(opts, { host, port: Number(port) || 443, path: '/', secure: !local });
+    }
+    return opts;
+  },
+
+  // ---- Relay (TURN) servers ----
+  // Same Wi-Fi: devices connect directly. Across the internet, many networks
+  // (especially mobile carriers using CGNAT) block direct links, so traffic
+  // has to go through a relay. We fetch short-lived relay credentials from
+  // Metered (ports 80/443 over UDP, TCP and TLS, so it gets through strict
+  // firewalls). WebRTC still prefers a direct link and only relays when it
+  // must. If the fetch fails we fall back to PeerJS's built-in servers.
+  // Paste your Metered credentials URL here, e.g.
+  //   'https://<your-app>.metered.live/api/v1/turn/credentials?apiKey=<key>'
+  // Empty = use PeerJS's built-in servers (fine on the same Wi-Fi).
+  TURN_URL: '',
+  // Add ?relay=1 to any page to force the relay (to test it on one Wi-Fi).
+  forceRelay: new URLSearchParams(location.search).get('relay') === '1',
+  _ice: null,
+
+  iceServers() {
+    if (this._ice) return this._ice;
+    if (!this.TURN_URL) return Promise.resolve(null);
+    const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = setTimeout(() => ctl && ctl.abort(), 4000);
+    this._ice = fetch(this.TURN_URL, ctl ? { signal: ctl.signal } : {})
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))))
+      .then((list) => {
+        if (!Array.isArray(list) || !list.length) throw new Error('empty');
+        return [{ urls: 'stun:stun.l.google.com:19302' }, ...list];
+      })
+      .catch((err) => {
+        console.warn('[rubick] relay credentials unavailable, using defaults:', err.message);
+        this._ice = null; // try again next time
+        return null;
+      })
+      .finally(() => clearTimeout(timer));
+    return this._ice;
+  },
+
+  // Peer options with relay servers filled in. Use this when creating a Peer.
+  async peerOptionsAsync() {
+    const opts = this.peerOptions;
+    const ice = await this.iceServers();
+    if (ice) {
+      opts.config = { iceServers: ice };
+      if (this.forceRelay) opts.config.iceTransportPolicy = 'relay';
     }
     return opts;
   },
