@@ -191,6 +191,17 @@ RubickGames.register({
       else if (Math.abs(offset) < 0.25) popup('Perfect', s, m.color, 0.7);
     }
 
+    // Remote players see the game as video (~0.15-0.2s behind) and their swing
+    // takes half a ping to arrive. Shift their timing window by that much so
+    // they're judged on what they actually saw.
+    function lagOf(m) {
+      if (!m || m.cpu) return 0;
+      const p = hub.players.get(m.id);
+      if (!p || !p.remote) return 0;
+      const oneWay = (p.rtt == null ? 120 : p.rtt) / 2000;
+      return Math.max(0, Math.min(0.45, 0.18 + oneWay));
+    }
+
     function swingBy(s, m, power) {
       m.swingT = Math.max(m.swingT, 0.2);
       if (phase === 'serve') {
@@ -200,7 +211,7 @@ RubickGames.register({
       }
       if (phase !== 'rally' || !ball || ball.hitter === s || ball.out) return;
       if (ball.receiver !== m) { popup('Partner’s ball', s, '#adb5bd', 0.6, 0.8); return; }
-      const u = (1 - ball.t) * ball.T;
+      const u = (1 - ball.t) * ball.T + lagOf(m);
       if (u > EARLY_LIMIT) { popup('Too early', s, '#adb5bd', 0.6, 0.8); return; }
       if (u < LATE_LIMIT) return;
       returnShot(s, m, power, u);
@@ -912,7 +923,7 @@ RubickGames.register({
             if (!cpuPlan.miss && ball.receiver) returnShot(rs, ball.receiver, cpuPlan.power, u);
             else if (ball.receiver) ball.receiver.swingT = 0.2;
           }
-          if (ball && ball.hitter !== rs && u < LATE_LIMIT) point(ball.hitter, `${ball.receiver ? ball.receiver.name : 'Someone'} missed!`);
+          if (ball && ball.hitter !== rs && u < LATE_LIMIT - lagOf(ball.receiver)) point(ball.hitter, `${ball.receiver ? ball.receiver.name : 'Someone'} missed!`);
         } else if (phase === 'point') {
           if (ball) ball.t += dt / ball.T;
           phaseT -= dt;

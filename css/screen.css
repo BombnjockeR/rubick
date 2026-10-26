@@ -153,6 +153,26 @@ button.ghost:hover { color: var(--text); border-color: rgba(255, 255, 255, 0.2);
   text-shadow: 0 0 24px rgba(124, 252, 74, 0.35);
 }
 
+.remote {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(77, 171, 247, 0.08);
+  border: 1px solid rgba(77, 171, 247, 0.18);
+}
+.remote p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.remote a {
+  color: #8cc8ff;
+  word-break: break-all;
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(140, 200, 255, 0.4);
+}
+
 .status {
   margin-top: 14px;
   font-size: 13px;

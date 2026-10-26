@@ -31,6 +31,8 @@
 
   const params = new URLSearchParams(location.search);
   codeInput.value = R.normalizeCode(params.get('room'));
+  // Set when the QR came from a watch page: this player sees the game as video.
+  const isRemote = params.get('remote') === '1';
   nameInput.value = store.get('rubick.name') || '';
   codeInput.addEventListener('input', () => { codeInput.value = R.normalizeCode(codeInput.value); });
 
@@ -80,7 +82,7 @@
     peer = new Peer(R.peerOptions);
 
     peer.on('open', () => {
-      conn = peer.connect(R.PREFIX + code, { reliable: true, metadata: { name } });
+      conn = peer.connect(R.PREFIX + code, { reliable: true, metadata: { name, remote: isRemote } });
       conn.on('open', () => {
         if (settled) return;
         settled = true;

@@ -18,6 +18,14 @@ Pick the game in the panel on the laptop. Switching games keeps everyone connect
 
 No phone? On the laptop, `WASD` moves, `Space` is A, `E` is B, `H` hides the panel.
 
+### Playing with friends who aren't in the room
+
+1. Your friend opens **`watch.html`** on their laptop or iPad and enters your room code (the link is in the host panel under "Friend far away?").
+2. Your laptop streams the game to them as live video (720p, ~2.5 Mbps each, peer-to-peer). Remote screens don't take a player seat.
+3. Their screen shows a QR code; they scan it with their phone to join as a controller.
+
+Phones that join from a watch page are marked **remote**. Table Tennis gives remote players extra timing allowance for the video delay (≈0.18s plus half their ping), so they're judged on what they actually saw. Expect roughly 0.15–0.3s of delay overall; your upload speed sets how many remote screens work well (1–3 is realistic at home).
+
 ## How it connects
 
 ```
@@ -42,6 +50,7 @@ Add `?peer=host:port` to the screen URL to use your own [PeerJS server](https://
 | `index.html`, `js/screen.js`, `css/screen.css` | Laptop hub: room, QR, roster, game switching |
 | `js/games/*.js` | One file per game (see the interface in `js/common.js`) |
 | `controller.html`, `js/controller.js`, `css/controller.css` | Phone gamepad |
+| `watch.html`, `js/watch.js`, `css/watch.css` | Remote screen: live video of the game + QR for the remote player's phone |
 | `js/common.js` | Shared constants, button bitmask, PeerJS options |
 | `vendor/` | PeerJS 1.5.5, qrcode-generator 2.0.4, and a trimmed Three.js 0.186 build (all MIT). Three.js loads only when a 3D game starts. |
 

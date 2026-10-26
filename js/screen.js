@@ -65,6 +65,7 @@
     canvas.height = Math.round(hub.H * DPR);
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     hub.UNIT = Math.min(hub.W, hub.H) / 100;
+    sizeMix();
     if (game && game.resize) game.resize();
   }
 
@@ -80,9 +81,10 @@
     return n || `P${slot + 1}`;
   }
 
-  function addPlayer(id, slot, name, conn) {
+  function addPlayer(id, slot, name, conn, remote = false) {
     const p = {
       id, slot, conn,
+      remote, // joined from a watch page: sees the game through the video stream
       name: cleanName(name, slot),
       color: COLORS[slot].hex,
       colorName: COLORS[slot].name,
@@ -131,7 +133,9 @@
   function updateStatus() {
     if (!peer || !peer.open) return;
     const n = hub.players.size;
-    setStatus(n ? `${n} player${n > 1 ? 's' : ''} connected` : 'Room open — waiting for players', 'ok');
+    const v = viewers.size;
+    const screens = v ? ` · ${v} remote screen${v > 1 ? 's' : ''}` : '';
+    setStatus((n ? `${n} player${n > 1 ? 's' : ''} connected` : 'Room open — waiting for players') + screens, 'ok');
     $('#chip').textContent = n ? `${code} · ${n}` : code;
   }
 
@@ -150,6 +154,12 @@
     qr.addData(join);
     qr.make();
     $('#qr').innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+    const watch = new URL('watch.html', window.location.href);
+    watch.searchParams.set('room', code);
+    if (R.peerServer) watch.searchParams.set('peer', R.peerServer);
+    const w = $('#watchUrl');
+    w.href = watch.href;
+    w.textContent = new URL('watch.html', window.location.href).href.replace(/^https?:\/\//, '');
     document.title = `Rubick — ${code}`;
   }
 
@@ -186,6 +196,8 @@
   }
 
   function onConnection(conn) {
+    const meta = conn.metadata || {};
+    if (meta.role === 'viewer') { onViewer(conn); return; }
     conn.on('open', () => {
       const slot = freeSlot();
       if (slot < 0) {
@@ -193,7 +205,7 @@
         setTimeout(() => conn.close(), 400);
         return;
       }
-      const p = addPlayer(conn.peer, slot, conn.metadata && conn.metadata.name, conn);
+      const p = addPlayer(conn.peer, slot, meta.name, conn, !!meta.remote);
       hub.send(p, { t: 'welcome', slot, color: p.color, colorName: p.colorName, name: p.name, code });
       hub.send(p, { t: 'mode', mode: controlMode() });
     });
@@ -218,6 +230,88 @@
     }
   }
 
+  // ---------- Remote screens ----------
+  // A friend far away opens watch.html on a laptop/iPad. It connects as a
+  // "viewer" (no player seat) and we call it back with a live video of the
+  // game: the 3D layer and the 2D HUD composited into one canvas.
+  const viewers = new Map(); // peer id -> { conn, call }
+  const MIX_MAX_W = 1280;
+  let mix = null, mixCtx = null, mixStream = null;
+
+  function ensureMix() {
+    if (mix) return;
+    mix = document.createElement('canvas');
+    mixCtx = mix.getContext('2d');
+    sizeMix();
+    mixStream = mix.captureStream(30);
+  }
+
+  function sizeMix() {
+    if (!mix) return;
+    const scale = Math.min(1, MIX_MAX_W / hub.W);
+    // even dimensions keep video encoders happy
+    mix.width = Math.max(2, Math.round((hub.W * scale) / 2) * 2);
+    mix.height = Math.max(2, Math.round((hub.H * scale) / 2) * 2);
+  }
+
+  function composeMix() {
+    if (!mix || !viewers.size) return;
+    mixCtx.fillStyle = '#0e0f13';
+    mixCtx.fillRect(0, 0, mix.width, mix.height);
+    for (const c of document.querySelectorAll('canvas.gl-layer')) mixCtx.drawImage(c, 0, 0, mix.width, mix.height);
+    mixCtx.drawImage(canvas, 0, 0, mix.width, mix.height);
+  }
+
+  function capBitrate(call) {
+    // ~2.5 Mbps per viewer: sharp enough for 720p, gentle on home upload.
+    const pc = call.peerConnection;
+    if (!pc) return;
+    for (const sender of pc.getSenders()) {
+      if (!sender.track || sender.track.kind !== 'video') continue;
+      const params = sender.getParameters();
+      if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+      params.encodings[0].maxBitrate = 2500000;
+      params.encodings[0].maxFramerate = 30;
+      // When bandwidth is short, give up a bit of both sharpness and
+      // smoothness instead of dropping to a blurry 180p.
+      params.degradationPreference = 'balanced';
+      sender.setParameters(params).catch(() => {});
+    }
+  }
+
+  function onViewer(conn) {
+    conn.on('open', () => {
+      ensureMix();
+      composeMix(); // make sure the first frame isn't blank
+      const call = peer.call(conn.peer, mixStream);
+      viewers.set(conn.peer, { conn, call });
+      if (call) {
+        setTimeout(() => capBitrate(call), 1500);
+        call.on('close', () => dropViewer(conn.peer));
+        call.on('error', () => dropViewer(conn.peer));
+      }
+      try { conn.send({ t: 'viewer-welcome', code, game: gameDef ? gameDef.name : '' }); } catch (_) {}
+      updateStatus();
+    });
+    conn.on('close', () => dropViewer(conn.peer));
+    conn.on('error', () => dropViewer(conn.peer));
+  }
+
+  function dropViewer(id) {
+    const v = viewers.get(id);
+    if (!v) return;
+    viewers.delete(id);
+    try { v.call && v.call.close(); } catch (_) {}
+    try { v.conn.close(); } catch (_) {}
+    updateStatus();
+  }
+
+  function tellViewers(msg) {
+    for (const v of viewers.values()) { try { v.conn.send(msg); } catch (_) {} }
+  }
+  // Heartbeat so a remote screen notices quickly if this tab goes away.
+  setInterval(() => { if (viewers.size) tellViewers({ t: 'hb' }); }, 1000);
+
   // ---------- Games ----------
   // 'pad' = Xbox-style gamepad, 'motion' = hold the phone like a paddle and swing.
   const controlMode = () => (gameDef && gameDef.controls) || 'pad';
@@ -238,6 +332,7 @@
       btn.setAttribute('aria-pressed', String(btn.dataset.game === def.id));
     }
     $('#gameBlurb').textContent = def.blurb || '';
+    tellViewers({ t: 'game', game: def.name });
     const url = new URL(window.location.href);
     url.searchParams.set('game', def.id);
     history.replaceState(null, '', url);
@@ -320,7 +415,7 @@
       dot.style.background = p.color;
       const name = document.createElement('span');
       name.className = 'name';
-      name.textContent = p.name;
+      name.textContent = p.remote ? `${p.name} · remote` : p.name;
       const meta = document.createElement('span');
       meta.className = 'meta';
       const gm = game && game.meta ? game.meta(p) : '';
@@ -362,6 +457,7 @@
       if (game.update) game.update(dt);
       if (game.draw) game.draw(ctx, now);
     }
+    composeMix(); // same frame as the 3D render, so its buffer is still there
     if (rosterDirty) renderRoster();
     requestAnimationFrame(frame);
   }

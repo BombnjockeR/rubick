@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0e0f13">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Rubick — Watch</title>
+  <meta name="description" content="Watch a Rubick game from anywhere and join with your phone.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2318181b'/%3E%3Ccircle cx='32' cy='32' r='18' fill='none' stroke='%237CFC4A' stroke-width='6'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/watch.css">
+</head>
+<body>
+
+  <!-- Join -->
+  <section id="join" class="join">
+    <div class="brand"><span class="mark" aria-hidden="true"></span>Rubick</div>
+    <p class="lead">Watch the game from here, play with your phone.</p>
+    <form id="joinForm" autocomplete="off">
+      <label>
+        <span>Room code</span>
+        <input id="codeInput" class="code-input" maxlength="4" autocapitalize="characters" spellcheck="false" placeholder="ABCD" required>
+      </label>
+      <button id="joinBtn" type="submit">Watch</button>
+      <p id="joinMsg" class="msg" role="status"></p>
+    </form>
+  </section>
+
+  <!-- Live stage -->
+  <main id="stage" class="stage" hidden>
+    <video id="video" autoplay muted playsinline></video>
+
+    <div id="waiting" class="waiting">
+      <div class="spinner" aria-hidden="true"></div>
+      <p>Connecting to the game…</p>
+    </div>
+
+    <aside id="card" class="card">
+      <button id="cardToggle" class="card-toggle" title="Hide">–</button>
+      <div class="card-body">
+        <p class="card-title">Join with your phone</p>
+        <div id="qr" class="qr" aria-label="QR code to join with your phone"></div>
+        <p class="card-code">Code <strong id="codeLabel">····</strong></p>
+      </div>
+    </aside>
+
+    <div class="bar">
+      <span id="live" class="live">● Live</span>
+      <span id="gameName" class="game-name"></span>
+      <button id="fsBtn" class="icon" title="Fullscreen" aria-label="Fullscreen">⛶</button>
+      <button id="leaveBtn" class="icon" title="Leave" aria-label="Leave">✕</button>
+    </div>
+  </main>
+
+  <script src="vendor/peerjs.min.js"></script>
+  <script src="vendor/qrcode.js"></script>
+  <script src="js/common.js"></script>
+  <script src="js/watch.js"></script>
+</body>
+</html>
