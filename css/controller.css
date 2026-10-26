@@ -489,6 +489,25 @@ input:focus { border-color: color-mix(in srgb, var(--me) 70%, transparent); }
   padding: 14px 26px;
   touch-action: manipulation;
 }
+.m-action {
+  align-self: stretch;
+  min-height: 60px;
+  border-radius: 16px;
+  background: var(--me);
+  color: #0c0d10;
+  font-weight: 800;
+  font-size: 19px;
+  touch-action: manipulation;
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--me) 30%, transparent);
+}
+.m-action.done {
+  background: var(--shell-2);
+  color: var(--text);
+  box-shadow: none;
+  border: 2px solid var(--me);
+}
+.m-action:active { transform: scale(0.98); }
+
 .m-tap {
   align-self: stretch;
   min-height: 64px;

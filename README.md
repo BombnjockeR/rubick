@@ -13,7 +13,7 @@ Pick the game in the panel on the laptop. Switching games keeps everyone connect
 | Game | How to play |
 | --- | --- |
 | **Snake** | Everyone presses **A** to ready up. Steer with stick or d-pad, eat white apples to grow. Hit a wall or any snake and you're out; your body turns into pellets. Last snake standing wins. |
-| **Table Tennis** | Motion controls: hold your phone like a paddle and swing. Your paddle follows the ball; *when* you swing aims it (early = to your left, late = to your right, way off = out), *how hard* sets the speed. First to 5. Solo players face the CPU; a second player takes its place. |
+| **Table Tennis** | 3D, motion controls. Scan in to a **waiting room** (60s, 4 seats); tap **Vote to start** on your phone or let the timer run out. 1–2 players play singles, 3–4 play doubles (each covers half the table); **AI fills empty seats** and takes over if someone leaves. Hold your phone like a paddle and swing: *when* you swing aims (early = your left, late = your right, way off = out), *how hard* sets speed. The camera sits behind your end and follows the ball; with humans on both sides the screen splits in two. First to 5. |
 | **Arena** | Free roam. Grab coins, **A** dashes (and knocks friends back), **B** honks. |
 
 No phone? On the laptop, `WASD` moves, `Space` is A, `E` is B, `H` hides the panel.
@@ -43,12 +43,14 @@ Add `?peer=host:port` to the screen URL to use your own [PeerJS server](https://
 | `js/games/*.js` | One file per game (see the interface in `js/common.js`) |
 | `controller.html`, `js/controller.js`, `css/controller.css` | Phone gamepad |
 | `js/common.js` | Shared constants, button bitmask, PeerJS options |
-| `vendor/` | PeerJS 1.5.5 and qrcode-generator 2.0.4 (MIT) |
+| `vendor/` | PeerJS 1.5.5, qrcode-generator 2.0.4, and a trimmed Three.js 0.186 build (all MIT). Three.js loads only when a 3D game starts. |
 
 ## Message format
 
 Phone → screen: `{t:'in', x, y, b}` (stick −1..1, button bitmask), `{t:'swing', power}` (motion, 0..1), `{t:'ping', ts}`, `{t:'rtt', ms}`
-Screen → phone: `{t:'welcome', slot, color, name}`, `{t:'mode', mode}` (`'pad'` or `'motion'`), `{t:'pong', ts}`, `{t:'rumble', ms}`, `{t:'hint', text}`, `{t:'full'}`
+Screen → phone: `{t:'welcome', slot, color, name}`, `{t:'mode', mode}` (`'pad'` or `'motion'`), `{t:'pong', ts}`, `{t:'rumble', ms}`, `{t:'hint', text}`, `{t:'action', label}` (shows a button, e.g. "Vote to start"; empty hides it), `{t:'full'}`
+
+Phone → screen also: `{t:'action'}` when that button is tapped.
 
 ### Motion controls
 

@@ -153,6 +153,14 @@
       case 'hint':
         setAll('.js-hint', String(msg.text || '').slice(0, 60));
         break;
+      case 'action': {
+        const btn = $('#actionBtn');
+        const label = String(msg.label || '').slice(0, 40);
+        btn.hidden = !label;
+        btn.textContent = label;
+        btn.classList.toggle('done', label.includes('✓'));
+        break;
+      }
       case 'mode':
         mode = msg.mode === 'motion' ? 'motion' : 'pad';
         if (connected) showMode();
@@ -192,6 +200,11 @@
       onDropped('');
     });
   }
+
+  $('#actionBtn').addEventListener('click', () => {
+    sendRaw({ t: 'action' });
+    haptic(20);
+  });
 
   function showMode() {
     releaseAll();
@@ -459,8 +472,10 @@
       setTimeout(() => paddle.classList.remove('swing'), 220);
     }
 
+    let shown = '';
     (function animate() {
-      meter.style.width = Math.min(100, level * 100).toFixed(0) + '%';
+      const w = Math.min(100, level * 100).toFixed(0) + '%';
+      if (w !== shown && mode === 'motion') { meter.style.width = w; shown = w; }
       level *= 0.93;
       requestAnimationFrame(animate);
     })();

@@ -212,6 +212,9 @@
       case 'swing':
         if (game && game.swing) game.swing(p, Math.max(0, Math.min(1, Number(msg.power) || 0)));
         break;
+      case 'action':
+        if (game && game.action) game.action(p);
+        break;
     }
   }
 
@@ -228,6 +231,7 @@
     if (game.join) for (const p of hub.players.values()) game.join(p);
     for (const p of hub.players.values()) {
       p.hintSent = null;
+      p.actionSent = null;
       hub.send(p, { t: 'mode', mode: controlMode() });
     }
     for (const btn of document.querySelectorAll('#games button')) {
@@ -252,14 +256,20 @@
     }
   }
 
-  // Phone hint line ("Press A when ready", …). Only sent when it changes.
+  // Phone hint line ("Press A when ready", …) and optional action button
+  // ("Vote to start"). Only sent when they change.
   function pushHints() {
-    if (!game || !game.hint) return;
+    if (!game) return;
     for (const p of hub.players.values()) {
-      const h = game.hint(p) || '';
+      const h = (game.hint && game.hint(p)) || '';
       if (h !== p.hintSent) {
         p.hintSent = h;
         hub.send(p, { t: 'hint', text: h });
+      }
+      const a = (game.actionLabel && game.actionLabel(p)) || '';
+      if (a !== p.actionSent) {
+        p.actionSent = a;
+        hub.send(p, { t: 'action', label: a });
       }
     }
   }
@@ -340,7 +350,7 @@
   // ---------- Loop ----------
   let last = performance.now();
   function frame(now) {
-    const dt = Math.min(0.05, (now - last) / 1000);
+    const dt = Math.min(0.1, (now - last) / 1000); // cap so a hiccup doesn't teleport things
     last = now;
 
     // A phone that went to sleep shouldn't keep steering.
