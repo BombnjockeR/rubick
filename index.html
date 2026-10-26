@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rubick — Screen</title>
+  <meta name="description" content="Rubick turns phones into game controllers. Open this on the laptop, join from your phone.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2318181b'/%3E%3Ccircle cx='32' cy='32' r='18' fill='none' stroke='%237CFC4A' stroke-width='6'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/screen.css">
+</head>
+<body>
+  <canvas id="arena" aria-label="Game arena"></canvas>
+
+  <aside id="lobby" class="lobby">
+    <header class="lobby-head">
+      <div class="brand"><span class="mark" aria-hidden="true"></span>Rubick</div>
+      <button id="toggle" class="ghost" title="Hide panel (H)">Hide</button>
+    </header>
+
+    <div class="lobby-body">
+      <p class="step">Scan to join on your phone</p>
+      <div id="qr" class="qr" aria-label="QR code to join"></div>
+
+      <div class="code-block">
+        <span class="label">or open</span>
+        <a id="joinUrl" class="url" target="_blank" rel="noopener">…</a>
+        <span class="label">and enter</span>
+        <div id="code" class="code">····</div>
+      </div>
+
+      <div id="status" class="status">Starting…</div>
+
+      <ul id="roster" class="roster"></ul>
+
+      <p class="hint">No phone handy? <kbd>WASD</kbd> moves, <kbd>Space</kbd> dashes, <kbd>E</kbd> honks.</p>
+    </div>
+  </aside>
+
+  <button id="chip" class="chip" hidden title="Show panel (H)"></button>
+
+  <script src="vendor/peerjs.min.js"></script>
+  <script src="vendor/qrcode.js"></script>
+  <script src="js/common.js"></script>
+  <script src="js/screen.js"></script>
+</body>
+</html>

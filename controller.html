@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#121317">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Rubick">
+  <title>Rubick — Controller</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2318181b'/%3E%3Ccircle cx='32' cy='32' r='18' fill='none' stroke='%237CFC4A' stroke-width='6'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/controller.css">
+</head>
+<body>
+
+  <!-- Join -->
+  <section id="join" class="join">
+    <div class="brand"><span class="mark" aria-hidden="true"></span>Rubick</div>
+    <form id="joinForm" autocomplete="off">
+      <label>
+        <span>Room code</span>
+        <input id="codeInput" class="code-input" maxlength="4" autocapitalize="characters" spellcheck="false" placeholder="ABCD" required>
+      </label>
+      <label>
+        <span>Your name</span>
+        <input id="nameInput" maxlength="12" spellcheck="false" placeholder="Player">
+      </label>
+      <button id="joinBtn" type="submit">Join</button>
+      <p id="joinMsg" class="msg" role="status"></p>
+    </form>
+  </section>
+
+  <!-- Gamepad -->
+  <main id="pad" class="pad" hidden>
+    <div class="top">
+      <button class="bumper" data-btn="LB">LB</button>
+      <div class="status">
+        <span id="meDot" class="me-dot"></span>
+        <span id="meName" class="me-name">…</span>
+        <span id="meScore" class="me-score"></span>
+        <span id="ping" class="ping">–</span>
+        <button id="fsBtn" class="icon" title="Fullscreen" aria-label="Fullscreen">⛶</button>
+        <button id="leaveBtn" class="icon" title="Leave" aria-label="Leave">✕</button>
+      </div>
+      <button class="bumper" data-btn="RB">RB</button>
+    </div>
+
+    <div id="stickZone" class="stick-zone">
+      <div id="stickBase" class="stick-base">
+        <div id="stickKnob" class="stick-knob"></div>
+      </div>
+    </div>
+
+    <div class="center">
+      <div class="sys">
+        <button class="sys-btn" data-btn="VIEW" aria-label="View">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="7" width="11" height="9" rx="1.5"/><rect x="9" y="4" width="11" height="9" rx="1.5"/></svg>
+        </button>
+        <div class="home" aria-hidden="true"></div>
+        <button class="sys-btn" data-btn="MENU" aria-label="Menu">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"/></svg>
+        </button>
+      </div>
+      <div class="dpad">
+        <button class="d up" data-btn="UP" aria-label="Up"></button>
+        <button class="d left" data-btn="LEFT" aria-label="Left"></button>
+        <span class="d mid"></span>
+        <button class="d right" data-btn="RIGHT" aria-label="Right"></button>
+        <button class="d dn" data-btn="DOWN" aria-label="Down"></button>
+      </div>
+    </div>
+
+    <div class="face">
+      <button class="fb y" data-btn="Y">Y</button>
+      <button class="fb x" data-btn="X">X</button>
+      <button class="fb b" data-btn="B">B</button>
+      <button class="fb a" data-btn="A">A</button>
+    </div>
+  </main>
+
+  <div id="rotate" class="rotate" hidden>
+    <div class="phone-icon" aria-hidden="true"></div>
+    <p>Turn your phone sideways</p>
+  </div>
+
+  <script src="vendor/peerjs.min.js"></script>
+  <script src="js/common.js"></script>
+  <script src="js/controller.js"></script>
+</body>
+</html>
