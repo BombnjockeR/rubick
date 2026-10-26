@@ -41,7 +41,8 @@ window.RUBICK = {
   // Paste your Metered credentials URL here, e.g.
   //   'https://<your-app>.metered.live/api/v1/turn/credentials?apiKey=<key>'
   // Empty = use PeerJS's built-in servers (fine on the same Wi-Fi).
-  TURN_URL: '',
+  // Metered's credential key is meant for browser use; it can only hand out relay logins.
+  TURN_URL: 'https://mangunihouse.metered.live/api/v1/turn/credentials?apiKey=207ebee3229bdda482f77caa15f67db7122d',
   // Add ?relay=1 to any page to force the relay (to test it on one Wi-Fi).
   forceRelay: new URLSearchParams(location.search).get('relay') === '1',
   _ice: null,
