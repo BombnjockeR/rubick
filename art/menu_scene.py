@@ -57,8 +57,10 @@ def platform(keyname, xy, top, rim, floor):
 # ======================================================================
 # Environment: terraces, stairs, lamps, city, clouds
 # ======================================================================
-env = Geo()
-env.box((80, 80, 0.2), (0, 0, GROUND - 0.1), mat('#f3ece1'), bevel=0)
+env = Geo()     # terraces, stairs, lamps: the floating island itself
+city = Geo()    # ground + distant blocks (the landing page hides these)
+sky = Geo()     # clouds
+city.box((80, 80, 0.2), (0, 0, GROUND - 0.1), mat('#f3ece1'), bevel=0)
 for (k, (x, y), top, *_r) in PLATS:
     h = top - 0.52 - GROUND
     env.rbox((PW + 1.3, PD + 1.0, h), (x + 0.25, y, GROUND + h / 2), mat(CREAM_D), radius=0.7, bevel=0.05)
@@ -93,18 +95,20 @@ for i in range(60):
     if x > 2 and y < 2:
         continue
     w, dd, h = 1 + rng.random() * 1.6, 1 + rng.random() * 1.6, 0.4 + rng.random() * 1.4
-    env.box((w, dd, h), (x, y, GROUND + h / 2), mat(rng.choice([CREAM, CREAM_D, CREAM_L])), bevel=0.06, seg=1)
+    city.box((w, dd, h), (x, y, GROUND + h / 2), mat(rng.choice([CREAM, CREAM_D, CREAM_L])), bevel=0.06, seg=1)
     if rng.random() < 0.4:
-        env.box((w * 0.5, dd * 0.5, 0.3), (x, y, GROUND + h + 0.15), mat(CREAM_L), bevel=0.04)
+        city.box((w * 0.5, dd * 0.5, 0.3), (x, y, GROUND + h + 0.15), mat(CREAM_L), bevel=0.04)
     if rng.random() < 0.35:
-        tree(env, (x + w * 0.6, y, GROUND), 1.6, rng)
+        tree(city, (x + w * 0.6, y, GROUND), 1.6, rng)
 cloud_m = mat('#ffffff', rough=0.9, emit=('#fff8ee', 0.35), name='cloud')
 for cx, cy, cz, s in ((-10, 4, 1.2, 1.5), (-9, -8, 0.8, 1.3), (4, 15, 1.6, 1.8), (-6, 14, 1.4, 1.6), (12, 10, 1.0, 1.4),
                       (-13, -1, 1.0, 1.2)):
     for j in range(7):
-        env.sphere((0.5 + rng.random() * 0.5) * s, (cx + (rng.random() - 0.5) * 2.6 * s, cy + (rng.random() - 0.5) * 1.0 * s,
+        sky.sphere((0.5 + rng.random() * 0.5) * s, (cx + (rng.random() - 0.5) * 2.6 * s, cy + (rng.random() - 0.5) * 1.0 * s,
                                                     cz + rng.random() * 0.35 * s), cloud_m, scale=(1, 1, 0.65), seg=14)
 env.build('environment')
+city.build('env_city')
+sky.build('env_clouds')
 
 
 # ======================================================================

@@ -1,4 +1,4 @@
-"""Rubick art toolkit for Blender (run headless via the `bpy` module).
+"""Mabar art toolkit for Blender (run headless via the `bpy` module).
 
 Everything is built from code so it can be re-run and tweaked:
   * Geo     - accumulates many primitives into ONE mesh (few draw calls)

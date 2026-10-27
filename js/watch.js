@@ -1,9 +1,9 @@
-// Rubick watch page: shows the host laptop's game as live video on a remote
+// Mabar watch page: shows the host laptop's game as live video on a remote
 // laptop/iPad, plus a QR code so the remote player can join with their phone.
 (() => {
   'use strict';
 
-  const R = window.RUBICK;
+  const R = window.MABAR;
   const $ = (s) => document.querySelector(s);
 
   const video = $('#video');
@@ -87,7 +87,7 @@
     });
 
     peer.on('error', (err) => {
-      console.warn('[rubick] peer error', err.type, err);
+      console.warn('[mabar] peer error', err.type, err);
       if (settled) return;
       if (err.type === 'peer-unavailable') fail(`No room called ${code}. Check the code on the host’s screen.`);
       else if (err.type === 'browser-incompatible') fail('This browser doesn’t support WebRTC.');
@@ -136,7 +136,7 @@
     qr.addData(ctrl.href);
     qr.make();
     $('#qr').innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
-    document.title = `Rubick — watching ${code}`;
+    document.title = `Mabar — watching ${code}`;
   }
 
   video.addEventListener('playing', () => { $('#waiting').hidden = true; });

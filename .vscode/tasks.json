@@ -1,0 +1,8 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    { "label": "Mabar: dev server", "type": "npm", "script": "dev", "isBackground": true, "problemMatcher": [], "group": { "kind": "build", "isDefault": true } },
+    { "label": "Mabar: dev server (HTTPS, for motion on phones)", "type": "npm", "script": "dev:https", "isBackground": true, "problemMatcher": [] },
+    { "label": "Mabar: rebuild 3D assets (Blender)", "type": "npm", "script": "assets", "problemMatcher": [] }
+  ]
+}

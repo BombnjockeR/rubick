@@ -3,10 +3,10 @@
 // The PeerJS cloud broker is only used to introduce the two devices;
 // once connected, input flows directly phone -> laptop.
 
-window.RUBICK = {
+window.MABAR = {
   // Room code N maps to PeerJS id PREFIX + N. Bump the version if the
   // message format changes so old controllers can't join new screens.
-  PREFIX: 'rubick-v1-',
+  PREFIX: 'mabar-v1-',
   CODE_LENGTH: 4,
   CODE_CHARS: 'ABCDEFGHJKLMNPQRSTUVWXYZ', // no I / O, they look like 1 / 0
   MAX_PLAYERS: 8,
@@ -59,7 +59,7 @@ window.RUBICK = {
         return [{ urls: 'stun:stun.l.google.com:19302' }, ...list];
       })
       .catch((err) => {
-        console.warn('[rubick] relay credentials unavailable, using defaults:', err.message);
+        console.warn('[mabar] relay credentials unavailable, using defaults:', err.message);
         this._ice = null; // try again next time
         return null;
       })
@@ -93,11 +93,11 @@ window.RUBICK = {
 };
 
 // Screen-side game registry. Each file in js/games/ registers one game:
-//   RubickGames.register({ id, name, blurb, create(hub) -> instance })
+//   MabarGames.register({ id, name, blurb, create(hub) -> instance })
 // An instance can implement any of:
 //   start(), stop(), join(p), leave(p), press(p, bits), update(dt),
 //   draw(ctx, timeMs), resize(), meta(p) -> roster text, hint(p) -> phone text
-window.RubickGames = {
+window.MabarGames = {
   list: [],
   register(game) { this.list.push(game); },
   get(id) { return this.list.find((g) => g.id === id); },

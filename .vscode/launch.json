@@ -1,0 +1,7 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    { "name": "Landing page (Chrome)", "type": "chrome", "request": "launch", "url": "http://localhost:8080/", "webRoot": "${workspaceFolder}" },
+    { "name": "Host screen (Chrome)", "type": "chrome", "request": "launch", "url": "http://localhost:8080/play.html", "webRoot": "${workspaceFolder}" }
+  ]
+}

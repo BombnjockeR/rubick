@@ -1,8 +1,8 @@
-// Rubick controller: turns the phone into an Xbox-style gamepad.
+// Mabar controller: turns the phone into an Xbox-style gamepad.
 (() => {
   'use strict';
 
-  const R = window.RUBICK;
+  const R = window.MABAR;
   const B = R.BTN;
   const $ = (s) => document.querySelector(s);
   const setAll = (sel, text) => { for (const el of document.querySelectorAll(sel)) el.textContent = text; };
@@ -33,7 +33,7 @@
   codeInput.value = R.normalizeCode(params.get('room'));
   // Set when the QR came from a watch page: this player sees the game as video.
   const isRemote = params.get('remote') === '1';
-  nameInput.value = store.get('rubick.name') || '';
+  nameInput.value = store.get('mabar.name') || '';
   codeInput.addEventListener('input', () => { codeInput.value = R.normalizeCode(codeInput.value); });
 
   function setMsg(text, bad = false) {
@@ -47,7 +47,7 @@
     const code = R.normalizeCode(codeInput.value);
     if (code.length !== R.CODE_LENGTH) { setMsg('Enter the 4-letter code shown on the screen', true); return; }
     const name = nameInput.value.trim().slice(0, 12);
-    store.set('rubick.name', name);
+    store.set('mabar.name', name);
     goFullscreen(); // needs the tap gesture, so do it right here
     join(code, name);
   });
@@ -99,7 +99,7 @@
     });
 
     peer.on('error', (err) => {
-      console.warn('[rubick] peer error', err.type, err);
+      console.warn('[mabar] peer error', err.type, err);
       if (connected) return; // broker hiccups don't matter once we're paired
       if (err.type === 'peer-unavailable') fail(`No room called ${code}. Check the code on the screen.`);
       else if (err.type === 'browser-incompatible') fail('This browser doesn’t support WebRTC.');

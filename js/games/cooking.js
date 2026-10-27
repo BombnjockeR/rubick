@@ -10,7 +10,7 @@
 //
 // Station models come from assets/kitchen.glb (art/kitchen.py, Blender); the
 // layout below decides where they go, so new kitchens are just new maps.
-RubickGames.register({
+MabarGames.register({
   id: 'cooking',
   name: 'Cooking',
   blurb: 'Co-op kitchen chaos: chop, cook, plate and serve orders before time runs out.',
@@ -556,15 +556,43 @@ RubickGames.register({
     }
 
     function drawRoomCard(ctx) {
+      const { W, H } = hub;
       const n = Math.min(MAX_CHEFS, hub.players.size);
       const need = [...hub.players.keys()].filter((id) => !votes.has(id)).length;
-      card(ctx, [
-        { t: 'COOKING', s: 30, w: 800, c: '#ff4b3e' },
-        { t: n ? `Kitchen opens in ${Math.ceil(roomT)}s` : 'Scan the QR code to join', s: 22, w: 800, c: '#222' },
-        { t: 'Move: stick · A: grab / drop · X: chop · B: dash', s: 15 },
-        { t: 'Tomato Soup & Onion Soup: 3 chopped in a pot · Salad: lettuce + tomato', s: 14, c: '#7a7368' },
-        { t: n ? `Walk around and practise · ${need ? need + ' more to vote start' : 'Starting…'}` : 'Up to 4 chefs', s: 14, c: '#7a7368' },
-      ], 620);
+      const wide = W >= 760;
+      const cw = Math.min(780, W - 32), chh = wide ? 330 : 520;
+      const x0 = (W - cw) / 2, y0 = Math.max(130, (H - chh) / 2);
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.25)';
+      ctx.shadowBlur = 30;
+      rr(ctx, x0, y0, cw, chh, 24);
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      ctx.fill();
+      ctx.restore();
+      rr(ctx, x0, y0, cw, 8, [24, 24, 0, 0]);
+      ctx.fillStyle = '#ff4b3e';
+      ctx.fill();
+      const qs = wide ? 190 : 160;
+      const qx = wide ? x0 + 32 : x0 + (cw - qs) / 2, qy = y0 + 34;
+      hub.drawJoin(ctx, qx, qy, qs, { label: 'Scan with your phone to join' });
+      const rx = wide ? qx + qs + 36 : x0 + 24, rw = wide ? cw - (rx - x0) - 28 : cw - 48;
+      const cx = rx + rw / 2;
+      let y = wide ? y0 + 58 : qy + qs + 92;
+      const line = (t, size, weight, color, gap = 30) => {
+        ctx.font = hub.font(weight, size);
+        ctx.fillStyle = color;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(t, cx, y);
+        y += gap;
+      };
+      line('COOKING', 30, 800, '#ff4b3e', 44);
+      line(n ? `Kitchen opens in ${Math.ceil(roomT)}s` : 'Waiting for the first chef', 22, 800, '#1d2433', 40);
+      line('Move with the stick. A grabs and drops, X chops, B dashes.', 14, 600, '#3a3630', 26);
+      line('Soup: 3 chopped tomatoes or onions in a pot.', 14, 500, '#6b665e', 22);
+      line('Salad: chopped lettuce and tomato on a plate.', 14, 500, '#6b665e', 36);
+      line(n ? (need ? `Walk around and practise. ${need} more vote${need > 1 ? 's' : ''} to start now.` : 'Starting…')
+        : 'Up to 4 chefs.', 14, 600, '#5d584f');
     }
 
     function drawOver(ctx) {

@@ -4,7 +4,7 @@
 //
 // Controls: phone stick / d-pad up-down to choose, A to play.
 // Laptop: arrow keys / WASD + Enter, or click a card.
-RubickGames.register({
+MabarGames.register({
   id: 'menu',
   name: 'Menu',
   hidden: true,
@@ -103,7 +103,7 @@ RubickGames.register({
 
     function choose() {
       const g = GAMES[sel];
-      if (!g.id || !RubickGames.get(g.id)) {
+      if (!g.id || !MabarGames.get(g.id)) {
         toast = { text: g.id ? `${g.title} is coming soon!` : 'This one is still being built!', t: 0 };
         return;
       }
@@ -268,60 +268,30 @@ RubickGames.register({
       ctx.fillRect(x + 2, y + Math.max(42, W * 0.03), 30, 3);
     }
 
-    let qrCache = null;
+    // No QR on the menu: the host picks a game first, friends join in its
+    // lobby. Once people are connected, show who's here.
     function drawJoin(ctx) {
       const { W, H } = hub;
-      const url = hub.joinUrl;
-      const code = hub.code;
       const players = [...hub.players.values()].sort((a, b) => a.slot - b.slot);
-      const qs = W < 900 ? 0 : Math.min(104, H * 0.13);
-      const w = W < 900 ? Math.min(W - 32, 340) : qs + 210;
-      const h = Math.max(qs + 28, 70 + Math.ceil(players.length / 2) * 22);
-      const x = W < 900 ? (W - w) / 2 : W * 0.05, y = W < 900 ? 16 : H * 0.1 + Math.max(58, W * 0.04);
-      ctx.save();
-      ctx.shadowColor = 'rgba(80,60,30,0.18)';
-      ctx.shadowBlur = 24;
-      rr(ctx, x, y, w, h, 18);
+      if (!players.length || W < 900) return;
+      const x = W * 0.05, y = H * 0.1 + Math.max(58, W * 0.04);
+      ctx.font = hub.font(700, 14);
+      let w = 28;
+      for (const p of players) w += ctx.measureText(p.name).width + 34;
+      rr(ctx, x, y, Math.min(w, W * 0.42), 40, 20);
       ctx.fillStyle = 'rgba(255,255,255,0.86)';
       ctx.fill();
-      ctx.restore();
-      if (qs && url) {
-        if (!qrCache || qrCache.url !== url) {
-          const q = window.qrcode(0, 'M');
-          q.addData(url);
-          q.make();
-          qrCache = { url, q };
-        }
-        const n = qrCache.q.getModuleCount();
-        const cell = (qs - 8) / n;
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(x + 14, y + 14, qs, qs);
-        ctx.fillStyle = '#1b1b1f';
-        for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
-          if (qrCache.q.isDark(r, c)) ctx.fillRect(x + 18 + c * cell, y + 18 + r * cell, Math.ceil(cell), Math.ceil(cell));
-        }
-      }
-      const tx = x + (qs ? qs + 30 : 18);
+      let px = x + 16;
       ctx.textAlign = 'left';
-      ctx.textBaseline = 'alphabetic';
-      ctx.fillStyle = '#8a8378';
-      ctx.font = hub.font(600, 12);
-      ctx.fillText(qs ? 'SCAN TO JOIN · CODE' : 'JOIN AT ' + (url ? new URL(url).host : '') + ' · CODE', tx, y + 30);
-      ctx.fillStyle = '#1e6bff';
-      ctx.font = hub.font(800, 30);
-      ctx.fillText(code || '····', tx, y + 62);
-      ctx.font = hub.font(600, 13);
-      if (!players.length) {
-        ctx.fillStyle = '#8a8378';
-        ctx.fillText('Waiting for players…', tx, y + 88);
-      }
-      players.slice(0, 8).forEach((p, i) => {
-        const px = tx + (i % 2) * 95, py = y + 88 + Math.floor(i / 2) * 22;
+      ctx.textBaseline = 'middle';
+      for (const p of players) {
+        if (px > x + W * 0.42 - 40) break;
         ctx.fillStyle = p.color;
-        ctx.beginPath(); ctx.arc(px + 6, py - 4, 6, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = '#333';
-        ctx.fillText(p.name.length > 9 ? p.name.slice(0, 8) + '…' : p.name, px + 17, py);
-      });
+        ctx.beginPath(); ctx.arc(px + 6, y + 20, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#1d2433';
+        ctx.fillText(p.name, px + 17, y + 21);
+        px += ctx.measureText(p.name).width + 34;
+      }
     }
 
     function drawFooter(ctx) {
@@ -335,7 +305,9 @@ RubickGames.register({
       ctx.fillText(g.tag, x, H - 52);
       ctx.fillStyle = 'rgba(60,55,48,0.5)';
       ctx.font = hub.font(500, 13);
-      ctx.fillText('Phone: stick to choose · A to play     Laptop: ↑ ↓ and Enter, or click', x, H - 30);
+      ctx.fillText(hub.players.size
+        ? 'Choose with the phone stick and A, or ↑ ↓ and Enter here'
+        : 'Pick a game with ↑ ↓ and Enter, or click it. Friends join with a QR code in its lobby.', x, H - 30);
     }
 
     function drawToast(ctx, dt) {

@@ -2,63 +2,146 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Rubick — Screen</title>
-  <meta name="description" content="Rubick turns phones into game controllers. Open this on the laptop, join from your phone.">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2318181b'/%3E%3Ccircle cx='32' cy='32' r='18' fill='none' stroke='%237CFC4A' stroke-width='6'/%3E%3C/svg%3E">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Mabar — party games, your phone is the controller</title>
+  <meta name="description" content="Open Mabar on a laptop or TV, friends scan a QR code, and everyone plays with their own phone. Tennis, table tennis and a co-op kitchen. No app, no account.">
+  <meta name="theme-color" content="#bfe3ff">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Mabar — your phone is the controller">
+  <meta property="og:description" content="Party games on the big screen. Friends scan a QR code and play with their phones. No app, no account.">
+  <meta property="og:image" content="assets/img/og.jpg">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%232f7dff'/%3E%3Ccircle cx='32' cy='33' r='15' fill='none' stroke='%23fff' stroke-width='7'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/screen.css">
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Rubik:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/landing.css">
 </head>
 <body>
-  <canvas id="arena" aria-label="Game arena"></canvas>
+  <a class="skip" href="#main">Skip to content</a>
 
-  <aside id="lobby" class="lobby">
-    <header class="lobby-head">
-      <div class="brand"><span class="mark" aria-hidden="true"></span>Rubick</div>
-      <button id="toggle" class="ghost" title="Hide panel (H)">Hide</button>
-    </header>
+  <header class="nav">
+    <a class="logo" href="./" aria-label="Mabar home"><span class="logo-mark" aria-hidden="true"></span>Mabar</a>
+    <nav aria-label="Sections">
+      <a href="#how">How it works</a>
+      <a href="#games">Games</a>
+      <a href="watch.html">Watch from afar</a>
+    </nav>
+    <a class="btn btn-small host-only" href="play.html">Host a game</a>
+  </header>
 
-    <div class="lobby-body">
-      <button id="menuBtn" class="menu-btn" type="button">◀ Main menu <kbd>Esc</kbd></button>
-      <p id="gameBlurb" class="blurb"></p>
-
-      <p class="step">Scan to join on your phone</p>
-      <div id="qr" class="qr" aria-label="QR code to join"></div>
-
-      <div class="code-block">
-        <span class="label">or open</span>
-        <a id="joinUrl" class="url" target="_blank" rel="noopener">…</a>
-        <span class="label">and enter</span>
-        <div id="code" class="code">····</div>
+  <main id="main">
+    <!-- Hero: the live island (desktop) or a still of it (phones) -->
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-stage" aria-hidden="true">
+        <canvas id="island"></canvas>
+        <picture><source media="(max-width: 760px)" srcset="assets/img/hero-phone.jpg"><img id="islandStill" src="assets/img/hero.jpg" alt="" hidden></picture>
       </div>
+      <div class="hero-copy">
+        <h1 id="hero-title">Your phone is the controller.</h1>
+        <p class="lead">Open Mabar on a laptop or TV, friends scan a QR code, and you’re playing in seconds. No app, no account.</p>
 
-      <div class="remote">
-        <span class="label">Friend far away?</span>
-        <p>They open <a id="watchUrl" target="_blank" rel="noopener">…</a> on a laptop or iPad, then scan the QR code it shows with their phone.</p>
+        <div class="cta host-only">
+          <a class="btn btn-big" href="play.html">Host a game</a>
+          <span class="cta-note">Runs right here in this browser</span>
+        </div>
+
+        <form class="join" id="joinForm" autocomplete="off">
+          <label for="code">Got a room code from a friend?</label>
+          <div class="join-row">
+            <input id="code" name="code" maxlength="4" autocapitalize="characters" spellcheck="false" placeholder="ABCD" inputmode="text" aria-describedby="joinMsg">
+            <button class="btn btn-join" type="submit">Join</button>
+          </div>
+          <p id="joinMsg" class="join-msg" role="status"></p>
+        </form>
+
+        <p class="phone-only phone-note">To host, open this page on a laptop or TV browser and choose Host a game. Phones are the controllers.</p>
       </div>
+    </section>
 
-      <div id="status" class="status">Starting…</div>
+    <!-- How it works: a real sequence, so it is numbered -->
+    <section class="how" id="how" aria-labelledby="how-title">
+      <h2 id="how-title">Three steps to a party</h2>
+      <ol class="steps">
+        <li style="--c: var(--blue)">
+          <span class="step-n" aria-hidden="true">1</span>
+          <h3>Open it on the big screen</h3>
+          <p>A laptop works, or a laptop plugged into the TV. Click Host a game.</p>
+        </li>
+        <li style="--c: var(--purple)">
+          <span class="step-n" aria-hidden="true">2</span>
+          <h3>Pick a game, share the QR</h3>
+          <p>Each game opens with a lobby and a QR code. Friends point their phone camera at it.</p>
+        </li>
+        <li style="--c: var(--tomato)">
+          <span class="step-n" aria-hidden="true">3</span>
+          <h3>Play with your phone</h3>
+          <p>Swing it like a racket or use it as a gamepad. Empty seats are filled by AI players.</p>
+        </li>
+      </ol>
+    </section>
 
-      <ul id="roster" class="roster"></ul>
+    <!-- Games: alternating rows -->
+    <section class="games" id="games" aria-labelledby="games-title">
+      <h2 id="games-title">What you can play</h2>
 
-      <p class="hint">No phone handy? <kbd>WASD</kbd> moves, <kbd>Space</kbd> is A, <kbd>E</kbd> is B. <kbd>H</kbd> hides this panel, <kbd>Esc</kbd> goes back to the menu.</p>
-    </div>
-  </aside>
+      <article class="game" style="--c: var(--blue)">
+        <img src="assets/img/tennis.jpg" alt="Tennis: a player in green about to serve on a blue court in a packed stadium" loading="lazy" width="1280" height="720">
+        <div class="game-copy">
+          <h3>Tennis</h3>
+          <p>Your player runs to the ball. You decide when to swing and how hard: swing early to send it left, late to send it right. Real scoring, from 15–love to advantage.</p>
+          <p class="game-facts"><span>Swing your phone</span><span>1 to 4 players</span><span>Singles or doubles</span></p>
+        </div>
+      </article>
 
-  <button id="chip" class="chip" hidden title="Show panel (H)"></button>
+      <article class="game game-flip" style="--c: var(--purple)">
+        <img src="assets/img/tabletennis.jpg" alt="Table tennis: two players at a blue table in a purple sports hall" loading="lazy" width="1280" height="720">
+        <div class="game-copy">
+          <h3>Table Tennis</h3>
+          <p>Short, fast rallies across the table. The timing ring tells you when the ball is in reach. With two of you, the screen splits so each side gets its own view.</p>
+          <p class="game-facts"><span>Swing your phone</span><span>1 to 4 players</span><span>First to 5</span></p>
+        </div>
+      </article>
 
-  <script src="vendor/peerjs.min.js"></script>
-  <script src="vendor/qrcode.js"></script>
-  <script src="vendor/three.rubick.min.js"></script>
+      <article class="game" style="--c: var(--tomato)">
+        <img src="assets/img/cooking.jpg" alt="Cooking: a chef in a checkered kitchen with crates, stoves and a serving window" loading="lazy" width="1280" height="720">
+        <div class="game-copy">
+          <h3>Cooking</h3>
+          <p>Chop, cook, plate and serve together before the orders run out. Soups burn if you forget them, and somebody always does.</p>
+          <p class="game-facts"><span>Phone gamepad</span><span>1 to 4 chefs</span><span>Co-op</span></p>
+        </div>
+      </article>
+    </section>
+
+    <section class="faq" aria-labelledby="faq-title">
+      <h2 id="faq-title">Good to know</h2>
+      <dl>
+        <div>
+          <dt>Nothing to install</dt>
+          <dd>Everything runs in the browser. Friends only need a phone with a camera to scan the code.</dd>
+        </div>
+        <div>
+          <dt>Any network</dt>
+          <dd>Phones don’t have to share your Wi-Fi. Mobile data works too.</dd>
+        </div>
+        <div>
+          <dt>A friend in another city</dt>
+          <dd>They open the <a href="watch.html">watch page</a> on their own laptop or iPad to see your game live, then join with their phone.</dd>
+        </div>
+        <div>
+          <dt>On iPhone</dt>
+          <dd>Tap Allow when asked about motion. That’s how your swings are detected.</dd>
+        </div>
+      </dl>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p><strong>Mabar</strong> comes from <em>main bareng</em>: playing together.</p>
+    <p class="foot-links"><a href="play.html">Host a game</a><a href="controller.html">Join with a code</a><a href="watch.html">Watch page</a></p>
+  </footer>
+
   <script src="js/common.js"></script>
-  <script src="js/kit3d.js"></script>
-  <script src="js/games/menu.js"></script>
-  <script src="js/games/racket.js"></script>
-  <script src="js/games/tennis.js"></script>
-  <script src="js/games/pingpong.js"></script>
-  <script src="js/games/cooking.js"></script>
-  <script src="js/screen.js"></script>
+  <script src="js/landing.js"></script>
 </body>
 </html>

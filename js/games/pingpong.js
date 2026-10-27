@@ -1,5 +1,5 @@
 // Table Tennis: a table in a sports hall; first to 5. Engine: js/games/racket.js
-RubickRacket.define({
+MabarRacket.define({
   id: 'pingpong',
   name: 'Table Tennis',
   place: 'table',

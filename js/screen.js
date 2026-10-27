@@ -1,9 +1,9 @@
-// Rubick screen hub: hosts the room, tracks controllers, and runs whichever
+// Mabar screen hub: hosts the room, tracks controllers, and runs whichever
 // game is selected. Switching games keeps every phone connected.
 (() => {
   'use strict';
 
-  const R = window.RUBICK;
+  const R = window.MABAR;
   const B = R.BTN;
   const $ = (s) => document.querySelector(s);
 
@@ -53,10 +53,46 @@
       return { x, y };
     },
     font(weight, px) { return `${weight} ${Math.round(px)}px Rubik, system-ui, sans-serif`; },
+    // Paints the join QR (size x size) with the room code under it. Drawn on
+    // the HUD canvas so remote screens see it too. Returns the block height.
+    drawJoin(ctx, x, y, size, { dark = '#1d2433', label = 'Scan to join' } = {}) {
+      const url = this.joinUrl;
+      // Local development: phones can't open "localhost" on the laptop.
+      if (/^(localhost|127\.|\[::1\])/.test(location.hostname)) label = 'Phones can’t open localhost: use your network address';
+      ctx.save();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.roundRect(x, y, size, size, 14); ctx.fill();
+      if (url) {
+        if (!qrCache || qrCache.url !== url) {
+          const q = window.qrcode(0, 'M');
+          q.addData(url);
+          q.make();
+          qrCache = { url, q };
+        }
+        const n = qrCache.q.getModuleCount();
+        const pad = size * 0.07;
+        const cell = (size - pad * 2) / n;
+        ctx.fillStyle = dark;
+        for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+          if (qrCache.q.isDark(r, c)) ctx.fillRect(x + pad + c * cell, y + pad + r * cell, Math.ceil(cell), Math.ceil(cell));
+        }
+      }
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = 'rgba(29,36,51,0.6)';
+      ctx.font = this.font(600, 13);
+      ctx.fillText(label, x + size / 2, y + size + 20);
+      ctx.fillStyle = dark;
+      ctx.font = this.font(800, Math.min(34, size * 0.2));
+      ctx.fillText(code ? code.split('').join(' ') : '· · · ·', x + size / 2, y + size + 20 + Math.min(36, size * 0.22));
+      ctx.restore();
+      return size + 24 + Math.min(36, size * 0.22);
+    },
   };
 
   let peer = null;
   let code = '';
+  let qrCache = null;
   let game = null;
   let gameDef = null;
   let rosterDirty = false;
@@ -168,7 +204,7 @@
     const w = $('#watchUrl');
     w.href = watch.href;
     w.textContent = new URL('watch.html', window.location.href).href.replace(/^https?:\/\//, '');
-    document.title = `Rubick — ${code}`;
+    document.title = `Mabar — ${code}`;
   }
 
   async function startHost() {
@@ -192,7 +228,7 @@
     });
 
     peer.on('error', (err) => {
-      console.warn('[rubick] peer error', err.type, err);
+      console.warn('[mabar] peer error', err.type, err);
       if (err.type === 'unavailable-id') {
         peer.destroy();
         startHost(); // code collision, roll a new one
@@ -329,7 +365,7 @@
   const controlMode = () => (gameDef && gameDef.controls) || 'pad';
 
   function setGame(id) {
-    const def = window.RubickGames.get(id) || window.RubickGames.list[0];
+    const def = window.MabarGames.get(id) || window.MabarGames.list[0];
     if (game && game.stop) game.stop();
     gameDef = def;
     game = def.create(hub);
@@ -472,5 +508,5 @@
   requestAnimationFrame(frame);
 
   // Handy in the browser console.
-  window.__rubick = { hub, setGame, get code() { return code; }, get game() { return game; } };
+  window.__mabar = { hub, setGame, get code() { return code; }, get game() { return game; } };
 })();

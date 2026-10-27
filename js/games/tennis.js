@@ -1,6 +1,6 @@
 // Tennis: a full-size court in a stadium. Real scoring (15-30-40, deuce,
 // advantage); first to 2 games wins. Engine: js/games/racket.js
-RubickRacket.define({
+MabarRacket.define({
   id: 'tennis',
   name: 'Tennis',
   place: 'stadium',

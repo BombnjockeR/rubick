@@ -1,82 +1,135 @@
-# Rubick
+# Mabar
 
-Turn your phone into a game controller. The laptop shows the game, phones join with a 4-letter room code (or by scanning a QR code) and get an Xbox-style pad.
+Party games on the big screen, where every phone is a controller. *Mabar* is short for *main bareng*: playing together.
 
-## Play
+Open Mabar on a laptop (or a laptop plugged into the TV), pick a game, and friends scan the QR code in its lobby. No app, no account.
 
-1. Open the site on the laptop (`index.html`). It shows a room code and a QR code.
-2. On your phone, scan the QR code or open `controller.html` and type the code.
-3. Turn the phone sideways and play. Friends scan the same QR code to join (up to 8).
+## Pages
 
-The laptop opens on a **3D main menu** (a toy-diorama island built in Blender, with characters playing each game on a loop). Choose with the phone's stick or d-pad and press **A**, or use the arrow keys + Enter / click on the laptop. The ⌂ button on the phone or `Esc` on the laptop goes back to the menu; everyone stays connected.
+| Page | Who opens it | What it does |
+| --- | --- | --- |
+| `index.html` | Anyone | Landing page: what Mabar is, how it works, the games. **Host a game** goes to `play.html`; phones get a room-code box instead. |
+| `play.html` | The host (laptop/TV) | Opens a room, shows the 3D main menu, runs the games. |
+| `controller.html` | Each player's phone | Gamepad or motion "paddle", depending on the game. |
+| `watch.html` | A friend far away (laptop/iPad) | Live video of the host's screen plus a QR for their phone. |
+
+## Games
+
+The host screen opens on a **3D main menu** (a toy-diorama island built in Blender, with characters playing each game on a loop). Pick with the arrow keys and Enter or a click; once phones have joined they can choose too (stick + **A**). Each game opens with a **waiting room** that shows the QR code and room code; friends join there. The phone's ⌂ button or `Esc` on the laptop goes back to the menu, and everyone stays connected.
 
 | Game | How to play |
 | --- | --- |
-| **Tennis** | Full-size court in a stadium, motion controls. Same waiting room, singles/doubles and AI seats as Table Tennis. Your character runs to the ball; you time the swing. Real scoring (15–30–40, deuce, advantage), first to 2 games. |
-| **Table Tennis** | Sports hall, motion controls. Scan in to a **waiting room** (60s, 4 seats); tap **Vote to start** on your phone or let the timer run out. 1–2 players play singles, 3–4 play doubles (each covers half the table); **AI fills empty seats** and takes over if someone leaves. Hold your phone like a paddle and swing: *when* you swing aims (early = your left, late = your right, way off = out), *how hard* sets speed. The camera sits behind your end and follows the ball; with humans on both sides the screen splits in two. First to 5. |
-| **Cooking** | Overcooked-style co-op for 1–4 chefs (gamepad). Walk around and practise in the waiting room, vote to start, then a 3-minute shift: grab ingredients from crates, chop on boards (**X**, tap or hold), cook soups (3 chopped tomatoes or onions in a pot; take it off before it burns), plate up and serve orders at the green window before their timers run out. Salad = chopped lettuce + chopped tomato on a plate. **A** grabs/drops, **B** dashes. 1–3 stars at the end. |
+| **Tennis** | Full-size court in a stadium, motion controls. Your character runs to the ball; you time the swing: *when* aims it (early = your left, late = your right, way off = out) and *how hard* sets the speed. Real scoring (15–30–40, deuce, advantage), first to 2 games. |
+| **Table Tennis** | Sports hall, motion controls, first to 5. 1–2 players play singles, 3–4 play doubles; AI fills empty seats and takes over if someone leaves. With humans on both sides the screen splits in two. |
+| **Cooking** | Overcooked-style co-op for 1–4 chefs on the phone gamepad. Grab ingredients, chop (**X**), cook soups (3 chopped tomatoes or onions in a pot; don't let them burn), plate up and serve orders before their timers run out. **A** grabs/drops, **B** dashes. 3-minute shift, 1–3 stars. |
 
 Stars on the menu cards are placeholders for a future popularity vote.
 
-No phone? On the laptop, `WASD` moves, `Space` is A, `E` is B, `H` hides the panel.
+No phone handy? On the host laptop `WASD` moves, `Space` is A, `E` is B, `H` shows the side panel.
 
-### Playing with friends who aren't in the room
+## Run it locally
 
-1. Your friend opens **`watch.html`** on their laptop or iPad and enters your room code (the link is in the host panel under "Friend far away?").
-2. Your laptop streams the game to them as live video (720p, ~2.5 Mbps each, peer-to-peer). Remote screens don't take a player seat.
-3. Their screen shows a QR code; they scan it with their phone to join as a controller.
+```bash
+npm install
+npm run dev          # http://localhost:8080 (landing) and /play.html (host)
+```
 
-Phones that join from a watch page are marked **remote**. Table Tennis gives remote players extra timing allowance for the video delay (≈0.18s plus half their ping), so they're judged on what they actually saw. Expect roughly 0.15–0.3s of delay overall; your upload speed sets how many remote screens work well (1–3 is realistic at home).
+Phones can't open `localhost` on your laptop. To test with real phones on the same Wi-Fi, open the host page using the network address that `npm run dev` prints (e.g. `http://192.168.1.20:8080/play.html`), so the QR code points somewhere phones can reach.
+
+**Motion games on phones need HTTPS** (browsers only expose the gyroscope on secure pages). Either test motion on the deployed site, or run a local HTTPS server:
+
+```bash
+brew install mkcert && mkcert -install   # once
+npm run cert                             # makes .cert/ for localhost + your network address
+npm run dev:https                        # https://<your-ip>:8443/play.html
+```
+
+Phones will warn about the certificate unless you install mkcert's root certificate on them; the gamepad games work fine over plain HTTP.
+
+VS Code: **Terminal → Run Task → Mabar: dev server**, or use the launch configs to open Chrome with the debugger attached.
+
+### Rebuilding the 3D art
+
+All models are generated by Blender scripts in `art/` (no hand-made `.blend` files):
+
+```bash
+pip install bpy            # Blender as a Python module (needs the matching Python, e.g. 3.13 for bpy 5.x)
+BPY=python3.13 npm run assets
+```
+
+That runs `menu_scene.py`, `sports.py` and `kitchen.py`, then compresses everything with meshopt into `assets/*.glb`.
 
 ## How it connects
 
 ```
-phone (controller.html) ──WebRTC data channel──▶ laptop (index.html)
+phone (controller.html) ──WebRTC data channel──▶ laptop (play.html)
             ╲                                       ╱
              ╲──── PeerJS lobby server (handshake) ╱
 ```
 
 - Everything is static files, so it runs on GitHub Pages with no backend of our own.
-- The free public [PeerJS](https://peerjs.com) server only introduces the two devices. After that, input goes straight from phone to laptop over WebRTC, usually a few milliseconds on the same Wi-Fi.
-- Room code `ABCD` is the laptop's PeerJS id `rubick-v1-ABCD`.
-- Up to 8 controllers per room. Phones get a short vibration on dash, coin pickup and bumps (Android only; iOS Safari doesn't support vibration).
+- Every host gets its own random 4-letter room (`ABCD` is the PeerJS id `mabar-v1-ABCD`), so groups never collide.
+- The free public [PeerJS](https://peerjs.com) server only introduces devices. After that, input goes straight from phone to laptop over WebRTC.
+- Up to 8 controllers per room (4 seats per game; the rest watch). Phones vibrate on hits (Android only).
 
 ### Relays for players on other networks
 
-On the same Wi-Fi, phone and laptop connect directly. Across the internet, many networks (mobile carriers with CGNAT especially) block direct links, so the connection needs a **TURN relay**. Set `TURN_URL` in `js/common.js` to a Metered credentials URL and every page fetches short-lived relay credentials (ports 80/443 over UDP, TCP and TLS) before connecting. WebRTC still uses a direct link whenever it can and only relays when it must. If `TURN_URL` is empty or unreachable, PeerJS's built-in servers are used.
+On the same Wi-Fi, phone and laptop connect directly. Across the internet, many networks (mobile carriers with CGNAT especially) block direct links, so the connection needs a **TURN relay**. `TURN_URL` in `js/common.js` points at a Metered credentials endpoint; every page fetches short-lived relay credentials before connecting. If it's empty or unreachable, PeerJS's built-in servers are used. Add `&relay=1` to a controller or watch URL to force the relay for testing. The Metered free plan includes 20 GB/month; a relayed remote-screen video uses about 1 GB per hour per viewer.
 
-To test the relay at home, add `&relay=1` to a controller or watch URL to force all traffic through it.
+### Friends who aren't in the room
 
-The Metered free plan includes 20 GB/month. Controller input is tiny; a relayed remote-screen video uses about 1 GB per hour per viewer.
+They open `watch.html` on their own screen and enter your room code; your laptop streams the game to them (720p, ~2.5 Mbps each, peer-to-peer). Their screen shows a QR for their phone. Phones that join from a watch page are marked **remote**, and the racket games widen their timing window by the video delay (~0.18 s plus half their ping).
 
 ### Self-hosting the lobby
 
-Add `?peer=host:port` to the screen URL to use your own [PeerJS server](https://github.com/peers/peerjs-server) instead of the public one. The QR code passes it along to phones automatically.
+Add `?peer=host:port` to the host URL to use your own [PeerJS server](https://github.com/peers/peerjs-server). The QR code passes it along to phones automatically.
 
-## Files
+## Project layout
 
 | Path | What |
 | --- | --- |
-| `index.html`, `js/screen.js`, `css/screen.css` | Laptop hub: room, QR, roster, game switching |
-| `js/games/*.js` | One file per game (see the interface in `js/common.js`); `menu.js` is the main menu |
-| `js/games/cooking.js` | Cooking game; the kitchen layout is a text map at the top, station models come from `assets/kitchen.glb` |
-| `js/games/racket.js` | Shared engine for Tennis and Table Tennis (room, AI, swing timing, scoring, chase cameras); `tennis.js` / `pingpong.js` are just configs |
-| `js/kit3d.js` | Shared Three.js renderer, lighting and cached `.glb` loader (meshopt-compressed assets) |
-| `art/*.py`, `assets/*.glb` | Blender scripts (run with the `bpy` module) and the 3D models they export. Rebuild everything with `BPY=python3.13 ./art/build.sh` (needs `pip install bpy` and Node). |
-| `controller.html`, `js/controller.js`, `css/controller.css` | Phone gamepad |
-| `watch.html`, `js/watch.js`, `css/watch.css` | Remote screen: live video of the game + QR for the remote player's phone |
-| `js/common.js` | Shared constants, button bitmask, PeerJS options |
-| `vendor/` | PeerJS 1.5.5, qrcode-generator 2.0.4, and a trimmed Three.js 0.186 build (all MIT). Three.js loads only when a 3D game starts. |
+| `index.html`, `js/landing.js`, `css/landing.css`, `assets/img/` | Landing page (live 3D island hero on desktop, still image on phones) |
+| `play.html`, `js/screen.js`, `css/screen.css` | Host hub: room, players, game switching, remote-screen streaming, `hub.drawJoin()` QR painter |
+| `js/games/menu.js` | 3D main menu |
+| `js/games/racket.js` | Shared engine for Tennis and Table Tennis (room, AI, swing timing, scoring, chase cameras); `tennis.js` / `pingpong.js` are configs |
+| `js/games/cooking.js` | Cooking; the kitchen layout is a text map at the top of the file |
+| `js/kit3d.js` | Three.js renderer, lighting, cached meshopt `.glb` loader |
+| `js/common.js` | Shared constants, button bitmask, PeerJS + TURN options, game registry (`MabarGames`) |
+| `controller.html`, `js/controller.js`, `css/controller.css` | Phone controller (gamepad + motion) |
+| `watch.html`, `js/watch.js`, `css/watch.css` | Remote screen |
+| `art/*.py`, `art/build.sh`, `assets/*.glb` | Blender scripts and the models they export |
+| `vendor/` | PeerJS 1.5.5, qrcode-generator 2.0.4, a Three.js 0.186 bundle with GLTFLoader + MeshoptDecoder (all MIT) |
+
+## Writing a game
+
+Register it in `js/games/yourgame.js` and add a `<script>` tag to `play.html`:
+
+```js
+MabarGames.register({
+  id: 'yourgame', name: 'Your Game', controls: 'pad', // or 'motion'
+  create(hub) {
+    return {
+      start() {}, stop() {}, join(p) {}, leave(p) {},
+      press(p, bits) {},          // newly pressed buttons (hub.B.A, hub.B.X, ...)
+      swing(p, power) {},         // motion games
+      action(p) {},               // the phone's big button (e.g. "Vote to start")
+      actionLabel(p) { return ''; },
+      hint(p) { return ''; },     // one line shown on the phone
+      update(dt) {}, draw(ctx, timeMs) {}, resize() {},
+    };
+  },
+});
+```
+
+`hub.players` holds connected phones (`p.sx`, `p.sy` stick, `p.b` buttons, `p.color`, `p.name`); `hub.dir(p)` gives stick-or-d-pad direction; `hub.rumble(p, ms)` vibrates; `hub.drawJoin(ctx, x, y, size)` paints the join QR.
 
 ## Message format
 
-Phone → screen: `{t:'in', x, y, b}` (stick −1..1, button bitmask), `{t:'swing', power}` (motion, 0..1), `{t:'ping', ts}`, `{t:'rtt', ms}`
-Screen → phone: `{t:'welcome', slot, color, name}`, `{t:'mode', mode}` (`'pad'` or `'motion'`), `{t:'pong', ts}`, `{t:'rumble', ms}`, `{t:'hint', text}`, `{t:'action', label}` (shows a button, e.g. "Vote to start"; empty hides it), `{t:'full'}`
+Phone → host: `{t:'in', x, y, b}` (stick −1..1, button bitmask), `{t:'swing', power}`, `{t:'action'}`, `{t:'menu'}`, `{t:'ping', ts}`, `{t:'rtt', ms}`
+Host → phone: `{t:'welcome', slot, color, name}`, `{t:'mode', mode}` (`'pad'` | `'motion'`), `{t:'hint', text}`, `{t:'action', label}`, `{t:'rumble', ms}`, `{t:'pong', ts}`, `{t:'full'}`
 
-Phone → screen also: `{t:'action'}` when that button is tapped.
+Buttons: A, B, X, Y, LB, RB, View, Menu, Up, Down, Left, Right = bits 0–11.
 
 ### Motion controls
 
-Each game declares `controls: 'pad' | 'motion'`; the phone switches screens automatically. In motion mode the phone reads the gyroscope (`devicemotion` rotation rate) and linear acceleration. A swing starts when rotation passes 260°/s or acceleration passes 14 m/s²; the phone takes the peak over the next 70 ms and sends `{t:'swing', power}`. Timing is judged on the laptop. iPhones ask for motion permission once (the "Enable motion" button), which needs HTTPS — GitHub Pages provides it. Phones without sensors get a tap-to-swing area.
-
-Buttons: A, B, X, Y, LB, RB, View, Menu, Up, Down, Left, Right = bits 0–11.
+In motion mode the phone reads the gyroscope and linear acceleration. A swing starts when rotation passes 260°/s or acceleration passes 14 m/s²; the phone takes the peak over the next 70 ms and sends `{t:'swing', power}`. Timing is judged on the host. iPhones ask for motion permission once (needs HTTPS). Phones without sensors get a tap-to-swing area.

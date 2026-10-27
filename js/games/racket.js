@@ -12,9 +12,9 @@
 // net at z = 0; side 0 plays from -Z, side 1 from +Z. The sim uses normalized
 // coords: nx -1..1 along the court (contact line to contact line), ny -1..1
 // across the playing width.
-window.RubickRacket = {
+window.MabarRacket = {
   define(cfg) {
-    RubickGames.register({
+    MabarGames.register({
       id: cfg.id,
       name: cfg.name,
       blurb: cfg.blurb,
@@ -146,7 +146,7 @@ function createRacketGame(hub, cfg) {
     cpuPlan = null;
     result = null;
     clearMembers3D();
-    hub.showLobby(true);
+    hub.showLobby(false); // the QR is in the room card; the side panel stays tucked away
     hub.refreshRoster();
   }
 
@@ -567,58 +567,66 @@ function createRacketGame(hub, cfg) {
   }
 
   function drawRoom(ctx) {
-    const { H } = hub;
+    const { W, H } = hub;
     const players = [...hub.players.values()].sort((a, b) => a.slot - b.slot);
     const seated = players.slice(0, SEATS);
-    const cx = centerX();
-    const cw = Math.min(620, hub.W - 360 - 40 > 420 ? hub.W - 380 : hub.W - 40);
-    const ch = 380;
-    const x0 = cx - cw / 2, y0 = H / 2 - ch / 2;
-
+    const wide = W >= 760;
+    const cw = Math.min(800, W - 32);
+    const ch = wide ? 400 : 560;
+    const x0 = (W - cw) / 2, y0 = Math.max(12, (H - ch) / 2);
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,0.25)';
     ctx.shadowBlur = 30;
-    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.fillStyle = 'rgba(255,255,255,0.94)';
     rr(ctx, x0, y0, cw, ch, 24); ctx.fill();
     ctx.restore();
     ctx.fillStyle = cfg.color;
     rr(ctx, x0, y0, cw, 8, [24, 24, 0, 0]); ctx.fill();
 
+    // Left: the way in. Right: who's here and when it starts.
+    const qs = wide ? 210 : 170;
+    const qx = wide ? x0 + 34 : x0 + (cw - qs) / 2, qy = y0 + (wide ? 64 : 30);
+    hub.drawJoin(ctx, qx, qy, qs, { label: 'Scan with your phone to join' });
+    const rx = wide ? x0 + 34 + qs + 34 : x0 + 24;
+    const rw = wide ? cw - (rx - x0) - 30 : cw - 48;
+    const cx = rx + rw / 2;
+    let ty = wide ? y0 + 58 : qy + qs + 90;
+
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillStyle = cfg.color;
     ctx.font = hub.font(800, 30);
-    ctx.fillText(cfg.name.toUpperCase(), cx, y0 + 46);
+    ctx.fillText(cfg.name.toUpperCase(), cx, ty);
     ctx.fillStyle = '#6b665e';
     ctx.font = hub.font(500, 14);
-    const mode = seated.length >= 3 ? 'Doubles · 2 vs 2' : 'Singles · 1 vs 1';
-    ctx.fillText(players.length ? `${mode} · ${cfg.matchLabel} · AI fills empty seats` : 'Scan the QR code to join', cx, y0 + 76);
+    const mode = seated.length >= 3 ? 'Doubles, 2 vs 2' : 'Singles, 1 vs 1';
+    ctx.fillText(players.length ? `${mode}. ${cfg.matchLabel}. AI fills empty seats.` : 'Waiting for the first player', cx, ty + 30);
 
     const secs = players.length ? Math.max(0, Math.ceil(roomT)) : ROOM_TIME;
-    ctx.fillStyle = '#222';
-    ctx.font = hub.font(800, 54);
-    ctx.fillText(`${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`, cx, y0 + 132);
+    ctx.fillStyle = '#1d2433';
+    ctx.font = hub.font(800, 50);
+    ctx.fillText(`${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`, cx, ty + 82);
     ctx.fillStyle = '#8a8378';
     ctx.font = hub.font(500, 13);
-    ctx.fillText(players.length ? 'until the match starts' : 'waiting for the first player', cx, y0 + 166);
+    ctx.fillText(players.length ? 'until the match starts' : 'the clock starts when someone joins', cx, ty + 114);
 
-    const gap = 10;
-    const sw = (cw - 48 - gap * (SEATS - 1)) / SEATS;
-    const sy = y0 + 192, sh = 104;
+    const gap = 8;
+    const sw = (rw - gap * (SEATS - 1)) / SEATS;
+    const sy = ty + 140, sh = 96;
     for (let i = 0; i < SEATS; i++) {
-      const sx = x0 + 24 + i * (sw + gap);
+      const sx = rx + i * (sw + gap);
       const p = seated[i];
       if (p) {
         ctx.fillStyle = '#f3efe8';
         rr(ctx, sx, sy, sw, sh, 14); ctx.fill();
         ctx.fillStyle = p.color;
-        ctx.beginPath(); ctx.arc(sx + sw / 2, sy + 30, 13, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = '#222';
-        ctx.font = hub.font(700, 15);
-        ctx.fillText(p.name.length > 10 ? p.name.slice(0, 9) + '…' : p.name, sx + sw / 2, sy + 60);
+        ctx.beginPath(); ctx.arc(sx + sw / 2, sy + 27, 12, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#1d2433';
+        ctx.font = hub.font(700, 14);
+        ctx.fillText(p.name.length > 9 ? p.name.slice(0, 8) + '…' : p.name, sx + sw / 2, sy + 55);
         const voted = votes.has(p.id);
         ctx.fillStyle = voted ? '#1fae4b' : '#9a9286';
         ctx.font = hub.font(600, 12);
-        ctx.fillText(voted ? '✓ voted' : 'not voted', sx + sw / 2, sy + 84);
+        ctx.fillText(voted ? '✓ voted' : 'not voted', sx + sw / 2, sy + 77);
       } else {
         ctx.setLineDash([5, 5]);
         ctx.strokeStyle = '#d6cfc4';
@@ -626,22 +634,22 @@ function createRacketGame(hub, cfg) {
         ctx.setLineDash([]);
         ctx.fillStyle = '#a39c90';
         ctx.font = hub.font(700, 14);
-        ctx.fillText('AI', sx + sw / 2, sy + 42);
+        ctx.fillText('AI', sx + sw / 2, sy + 40);
         ctx.font = hub.font(500, 11);
-        ctx.fillText('open seat', sx + sw / 2, sy + 64);
+        ctx.fillText('open seat', sx + sw / 2, sy + 60);
       }
     }
     ctx.fillStyle = '#5d584f';
     ctx.font = hub.font(500, 14);
     const need = players.length - [...votes].filter((id) => hub.players.has(id)).length;
     const line = !players.length ? 'Up to 4 players. Hold your phone like a racket.'
-      : need > 0 ? `Tap “Vote to start” on your phone · ${need} more vote${need > 1 ? 's' : ''} to start now`
+      : need > 0 ? `Tap “Vote to start” on your phone. ${need} more vote${need > 1 ? 's' : ''} to start now.`
         : 'Starting…';
-    ctx.fillText(line, cx, y0 + ch - 34);
+    ctx.fillText(line, cx, sy + sh + 30);
     if (players.length > SEATS) {
       ctx.fillStyle = '#9a9286';
       ctx.font = hub.font(500, 12);
-      ctx.fillText(`${players.length - SEATS} watching — they’ll get the next match`, cx, y0 + ch - 14);
+      ctx.fillText(`${players.length - SEATS} watching. They’ll get the next match.`, cx, sy + sh + 52);
     }
   }
 

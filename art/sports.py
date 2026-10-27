@@ -96,12 +96,12 @@ for x in (-WD - 0.914, WD + 0.914):
 g.box(((WD + 0.914) * 2, 0.03, 0.86), (0, 0, 0.48), mat('#262a33', rough=0.95), bevel=0)
 g.box(((WD + 0.914) * 2, 0.06, 0.07), (0, 0, 0.93), line, bevel=0.02)
 g.box((0.05, 0.035, 0.9), (0, 0, 0.47), line, bevel=0)
-# Back and side boards with the RUBICK name
+# Back and side boards with the MABAR name
 board = mat('#1f3f8a', rough=0.5)
 for y in (-L - 6.5, L + 6.5):
     g.box((WD * 2 + 9, 0.2, 1.0), (0, y, 0.5), board, bevel=0.05)
     for xx in (-6, 0, 6):
-        g.text('RUBICK', 0.62, (xx, y - 0.11 * (1 if y > 0 else -1), 0.52), mat('#ffffff'), depth=0.02,
+        g.text('MABAR', 0.62, (xx, y - 0.11 * (1 if y > 0 else -1), 0.52), mat('#ffffff'), depth=0.02,
                rot=(PI / 2, 0, 0 if y > 0 else PI))
 for x in (-WD - 4.6, WD + 4.6):
     g.box((0.2, L * 2 + 13, 1.0), (x, 0, 0.5), mat('#2f7dff', rough=0.5), bevel=0.05)
