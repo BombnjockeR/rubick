@@ -9,7 +9,9 @@
     load(url, onProgress) {
       if (!cache.has(url)) {
         cache.set(url, new Promise((resolve, reject) => {
-          new THREE.GLTFLoader().load(
+          const loader = new THREE.GLTFLoader();
+          loader.setMeshoptDecoder(THREE.MeshoptDecoder); // assets are meshopt-compressed
+          loader.load(
             new URL(url, window.location.href).href,
             (gltf) => {
               gltf.scene.traverse((o) => {

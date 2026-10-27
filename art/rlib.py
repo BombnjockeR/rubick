@@ -19,6 +19,7 @@ TAU = math.tau
 # ---------------------------------------------------------------- scene
 def reset(fps=30):
     bpy.ops.wm.read_factory_settings(use_empty=True)
+    _MATS.clear()  # materials from the previous scene are gone
     sc = bpy.context.scene
     sc.render.fps = fps
     bpy.context.preferences.edit.keyframe_new_interpolation_type = 'LINEAR'
@@ -283,15 +284,18 @@ class Chibi:
     """
 
     def __init__(self, name, parent=None, loc=(0, 0, 0), face=0.0, shirt='#ffffff', shorts='#2c3e66',
-                 hair=None, skin=SKIN, outfit='sport', hat=None, s=1.0, rng=random):
+                 hair=None, skin=SKIN, outfit='sport', hat=None, s=1.0, rng=random, tint=False, accent='#ff3d57'):
         self.name = name
         hair = hair or rng.choice(HAIRS)
         self.root = empty(f'{name}', parent, loc, (0, 0, face))
         self.root.scale = (s, s, s)
+        # tint=True gives the recolorable parts fixed material names so the game
+        # can paint them in each player's color ('shirt', 'accent', 'hair').
         skin_m = mat(skin)
-        shirt_m = mat(shirt)
+        shirt_m = mat(shirt, name='shirt' if tint else None)
         shorts_m = mat(shorts)
-        hair_m = mat(hair, rough=0.5)
+        hair_m = mat(hair, rough=0.5, name='hair' if tint else None)
+        accent_m = mat(accent, name='accent' if tint else None)
 
         # legs
         self.legL = self._leg('legL', -0.042, skin_m, shorts_m)
@@ -302,7 +306,8 @@ class Chibi:
         g.cyl(0.082, 0.07, (0, 0, 0.13), shorts_m, seg=18, bevel=0.02)
         g.cyl(0.08, 0.13, (0, 0, 0.2), shirt_m, seg=18, bevel=0.03, r2=0.07)
         if outfit == 'chef':
-            g.box((0.11, 0.02, 0.14), (0, -0.075, 0.17), mat('#ffffff'), bevel=0.008)
+            g.box((0.11, 0.02, 0.14), (0, -0.075, 0.17), accent_m if tint else mat('#ffffff'), bevel=0.008)
+            g.cyl(0.07, 0.03, (0, -0.01, 0.262), accent_m if tint else mat('#ff4b3e'), seg=16)
             for zz in (0.21, 0.17):
                 g.sphere(0.009, (0.03, -0.083, zz), mat('#d9d9d9'), seg=8)
         elif outfit == 'sport':
@@ -323,7 +328,7 @@ class Chibi:
             g.sphere(0.022, (ex * 1.7, -0.118, 0.075), mat('#ff9a9a'), scale=(1.2, 0.3, 0.7), seg=10)
         g.sphere(0.012, (0, -0.138, 0.07), mat('#e98f7c'), scale=(1.6, 0.5, 0.6), seg=8)
         if hat == 'band':
-            g.cyl(0.146, 0.03, (0, 0.005, 0.2), mat('#ff3d57'), seg=24)
+            g.cyl(0.146, 0.03, (0, 0.005, 0.2), accent_m if tint else mat('#ff3d57'), seg=24)
         elif hat == 'chef':
             g.cyl(0.11, 0.07, (0, 0.005, 0.265), mat('#ffffff'), seg=20)
             for dx, dy in ((0, 0), (0.06, 0.03), (-0.06, 0.03), (0.0, 0.06), (0.04, -0.04), (-0.04, -0.04)):
