@@ -264,6 +264,17 @@ input:focus { border-color: color-mix(in srgb, var(--me) 70%, transparent); }
   place-items: center;
 }
 .hint:empty { visibility: hidden; }
+.pad-action {
+  margin-top: 4px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: var(--me);
+  color: #0c0d10;
+  font-weight: 800;
+  font-size: clamp(12px, 3.4vh, 15px);
+  touch-action: manipulation;
+}
+.pad-action.done { background: var(--shell-2); color: var(--text); border: 2px solid var(--me); }
 
 .sys {
   display: flex;

@@ -8,6 +8,7 @@ BPY=${BPY:-python3}
 TMP=$(mktemp -d)
 "$BPY" art/menu_scene.py "$TMP/menu.glb"
 "$BPY" art/sports.py "$TMP"
+"$BPY" art/kitchen.py "$TMP/kitchen.glb"
 for f in "$TMP"/*.glb; do
   ${GLTF_TRANSFORM:-npx --yes @gltf-transform/cli@4} optimize "$f" "assets/$(basename "$f")" \
     --compress meshopt --texture-compress false --simplify false --instance false \

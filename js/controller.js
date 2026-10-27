@@ -160,11 +160,12 @@
         setAll('.js-hint', String(msg.text || '').slice(0, 60));
         break;
       case 'action': {
-        const btn = $('#actionBtn');
         const label = String(msg.label || '').slice(0, 40);
-        btn.hidden = !label;
-        btn.textContent = label;
-        btn.classList.toggle('done', label.includes('✓'));
+        for (const btn of document.querySelectorAll('.js-action')) {
+          btn.hidden = !label;
+          btn.textContent = label;
+          btn.classList.toggle('done', label.includes('✓'));
+        }
         break;
       }
       case 'mode':
@@ -211,10 +212,9 @@
     btn.addEventListener('click', () => { sendRaw({ t: 'menu' }); haptic(15); });
   }
 
-  $('#actionBtn').addEventListener('click', () => {
-    sendRaw({ t: 'action' });
-    haptic(20);
-  });
+  for (const btn of document.querySelectorAll('.js-action')) {
+    btn.addEventListener('click', () => { sendRaw({ t: 'action' }); haptic(20); });
+  }
 
   function showMode() {
     releaseAll();

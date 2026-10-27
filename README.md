@@ -14,7 +14,7 @@ The laptop opens on a **3D main menu** (a toy-diorama island built in Blender, w
 | --- | --- |
 | **Tennis** | Full-size court in a stadium, motion controls. Same waiting room, singles/doubles and AI seats as Table Tennis. Your character runs to the ball; you time the swing. Real scoring (15–30–40, deuce, advantage), first to 2 games. |
 | **Table Tennis** | Sports hall, motion controls. Scan in to a **waiting room** (60s, 4 seats); tap **Vote to start** on your phone or let the timer run out. 1–2 players play singles, 3–4 play doubles (each covers half the table); **AI fills empty seats** and takes over if someone leaves. Hold your phone like a paddle and swing: *when* you swing aims (early = your left, late = your right, way off = out), *how hard* sets speed. The camera sits behind your end and follows the ball; with humans on both sides the screen splits in two. First to 5. |
-| **Cooking** | Coming next: Overcooked-style co-op kitchen. |
+| **Cooking** | Overcooked-style co-op for 1–4 chefs (gamepad). Walk around and practise in the waiting room, vote to start, then a 3-minute shift: grab ingredients from crates, chop on boards (**X**, tap or hold), cook soups (3 chopped tomatoes or onions in a pot; take it off before it burns), plate up and serve orders at the green window before their timers run out. Salad = chopped lettuce + chopped tomato on a plate. **A** grabs/drops, **B** dashes. 1–3 stars at the end. |
 
 Stars on the menu cards are placeholders for a future popularity vote.
 
@@ -59,6 +59,7 @@ Add `?peer=host:port` to the screen URL to use your own [PeerJS server](https://
 | --- | --- |
 | `index.html`, `js/screen.js`, `css/screen.css` | Laptop hub: room, QR, roster, game switching |
 | `js/games/*.js` | One file per game (see the interface in `js/common.js`); `menu.js` is the main menu |
+| `js/games/cooking.js` | Cooking game; the kitchen layout is a text map at the top, station models come from `assets/kitchen.glb` |
 | `js/games/racket.js` | Shared engine for Tennis and Table Tennis (room, AI, swing timing, scoring, chase cameras); `tennis.js` / `pingpong.js` are just configs |
 | `js/kit3d.js` | Shared Three.js renderer, lighting and cached `.glb` loader (meshopt-compressed assets) |
 | `art/*.py`, `assets/*.glb` | Blender scripts (run with the `bpy` module) and the 3D models they export. Rebuild everything with `BPY=python3.13 ./art/build.sh` (needs `pip install bpy` and Node). |
