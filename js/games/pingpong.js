@@ -9,8 +9,11 @@ MabarRacket.define({
   scoring: 'points',
   points: 5,
   env: 'assets/tt_hall.glb',
-  character: 'ch_tt',
+  character: 'ch_tt',          // chibi fallback (assets/characters.glb)
   charScale: 3.0,
+  characters: ['bunny', 'dog'], // same animals as Tennis (js/character.js)...
+  characterScale: 1.55,
+  tool: 'paddle',               // ...holding a table-tennis paddle instead of the racket
   court: {
     line: 1.72,
     halfW: 0.7625,
@@ -21,7 +24,7 @@ MabarRacket.define({
   ballR: 0.035, ballColor: '#ffffff',
   serveT: 1.5, serveTP: 0.6, shotT: 1.35, shotTP: 0.73, cpuHard: 0.75,
   reach: 0.55, standBack: 0.35, runSpeed: 1.5, moveRate: 6, maxStep: 3,
-  cam: { back: 3.1, height: 3.0, rise: 0.1, push: 0.3, lookY: 0.55, ahead: -0.45, track: 0.5, follow: 0.4, fov: 50 },
+  cam: { back: 3.1, height: 3.5, rise: 0.1, push: 0.3, lookY: 0.55, ahead: -0.45, track: 0.5, follow: 0.4, fov: 50 }, // high enough to see over the big animal heads
   orbit: [6.5, 3.8, 0.6],
   sky: '#f6e8d8', fog: [25, 60], shadowSize: 7, sun: [4, 9, 3],
   tagSize: 0.28, blobGrow: 1.2, blobFade: 0.35,

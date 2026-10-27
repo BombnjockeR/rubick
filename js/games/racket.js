@@ -1,8 +1,12 @@
 // Shared engine for racket sports (Tennis, Table Tennis): swing your phone.
 //
 // Flow: waiting room (60s, up to 4 seats, vote to start) -> match -> back to room.
-// 1-2 players play singles, 3-4 play doubles; AI fills any empty seat and takes
-// over for anyone who leaves mid-match.
+// Seats alternate sides (1 and 3 near, 2 and 4 far). Humans take seats in join
+// order; an empty seat gets an AI unless the host closes it (the [x] on the room
+// card, or keys 1-4), so any 1v1, 2v2 or 2v1 lineup works. By default 1-2 players
+// get singles and 3-4 doubles. AI takes over for anyone who leaves mid-match.
+// "Start now" (button or F) starts at once; with nobody joined it's an AI-only
+// demo that repeats until someone joins (F goes back to the waiting room).
 //
 // Your character runs to the ball by itself (like Wii/Switch Sports). You only
 // time the swing: WHEN you swing aims the ball (early = to your left, late = to
@@ -53,6 +57,9 @@ function createRacketGame(hub, cfg) {
   let result = null;
   let banner = null;
   let doubles = false;
+  let demo = false;          // AI-only match (started with nobody seated); repeats
+  const seatSet = [null, null, null, null]; // host's choice per seat: 'open' | 'closed' | null = default
+  let roomHits = [];         // clickable areas on the room card: { x, y, w, h, act }
   const popups = [];
 
   function newSide() { return { score: 0, games: 0, members: [] }; }
@@ -139,6 +146,7 @@ function createRacketGame(hub, cfg) {
   // ---------- Room & match flow ----------
   function toRoom() {
     phase = 'room';
+    demo = false;
     roomT = ROOM_TIME;
     votes.clear();
     sides = [newSide(), newSide()];
@@ -156,17 +164,41 @@ function createRacketGame(hub, cfg) {
       : { id: `cpu${s}${i}`, cpu: true, name: 'CPU', color: CPU_COLORS[i % 2], lane: 0, py: 0, swingT: 0, side: s, vx: 0, run: 0 };
   }
 
-  function startMatch() {
+  // Seat i plays for side i % 2. Each entry: { human } | { ai: true } | null (closed).
+  function lineup() {
     const humans = [...hub.players.values()].sort((a, b) => a.slot - b.slot).slice(0, SEATS);
-    doubles = humans.length >= 3;
-    sides = [newSide(), newSide()];
-    if (doubles) {
-      sides[0].members = [makeMember(humans[0], 0, 0), makeMember(humans[2], 0, 1)];
-      sides[1].members = [makeMember(humans[1], 1, 0), makeMember(humans[3], 1, 1)];
-    } else {
-      sides[0].members = [makeMember(humans[0], 0, 0)];
-      sides[1].members = [makeMember(humans[1], 1, 0)];
+    return [0, 1, 2, 3].map((i) => {
+      if (humans[i]) return { human: humans[i] };
+      const byDefault = i < 2 || humans.length >= 3 ? 'open' : 'closed';
+      return (seatSet[i] || byDefault) === 'open' ? { ai: true } : null;
+    });
+  }
+  const sideCount = (L, s) => (L[s] ? 1 : 0) + (L[s + 2] ? 1 : 0);
+
+  function toggleSeat(i) {
+    if (phase !== 'room') return;
+    const L = lineup();
+    if (L[i] && L[i].human) return;
+    const before = seatSet[i];
+    seatSet[i] = L[i] ? 'closed' : 'open';
+    const L2 = lineup();
+    if (!sideCount(L2, 0) || !sideCount(L2, 1)) {
+      seatSet[i] = before;
+      popup('Each side needs at least one player', null, '#ffd43b', 1.4, 0.7);
     }
+    hub.refreshRoster();
+  }
+
+  function startMatch() {
+    const L = lineup();
+    demo = !L.some((x) => x && x.human);
+    sides = [newSide(), newSide()];
+    L.forEach((x, i) => {
+      if (!x) return;
+      const s = i % 2;
+      sides[s].members.push(makeMember(x.human || null, s, sides[s].members.length));
+    });
+    doubles = sides.some((sd) => sd.members.length > 1);
     for (const sd of sides) {
       if (sd.members.length === 2) { sd.members[0].lane = -1; sd.members[1].lane = 1; }
     }
@@ -178,11 +210,17 @@ function createRacketGame(hub, cfg) {
     rally = 0;
     phase = 'intro';
     phaseT = 2.6;
-    banner = { text: `${teamName(0)}  vs  ${teamName(1)}`, sub: (doubles ? 'Doubles' : 'Singles') + ' · ' + cfg.matchLabel, t: 0, life: 2.6 };
+    banner = { text: `${teamName(0)}  vs  ${teamName(1)}`, sub: `${formatName(sides[0].members.length, sides[1].members.length)} · ${demo ? 'AI demo' : cfg.matchLabel}`, t: 0, life: 2.6 };
     buildMembers3D();
     hub.showLobby(false);
     for (const p of hub.players.values()) hub.rumble(p, 40);
     hub.refreshRoster();
+  }
+
+  function formatName(a, b) {
+    if (a === 1 && b === 1) return 'Singles';
+    if (a === 2 && b === 2) return 'Doubles';
+    return `${a} vs ${b}`;
   }
 
   function startServe() {
@@ -198,6 +236,7 @@ function createRacketGame(hub, cfg) {
     const { text, matchOver } = award(winner, reason);
     phase = 'point';
     phaseT = 1.7;
+    celebrate(winner, 'jump');
     popup(text, null, '#ffffff', 1.7, 1.25);
     for (const m of sides[winner].members) if (!m.cpu) hub.rumble(hub.players.get(m.id), 60);
     for (const m of sides[1 - winner].members) if (!m.cpu) hub.rumble(hub.players.get(m.id), 160);
@@ -232,7 +271,9 @@ function createRacketGame(hub, cfg) {
   function serve(power) {
     const { s, m } = serverInfo();
     const aimY = Math.max(-0.85, Math.min(0.85, (Math.random() - 0.5) * 1.4));
-    launch(s, m, m.py, aimY, cfg.serveT - power * cfg.serveTP, power);
+    const tp = tossPos(s, m);   // struck where the toss is, not teleported to the contact point
+    launch(s, m, tp.x / halfW(), aimY, cfg.serveT - power * cfg.serveTP, power);
+    ball.h0 = tp.y - C.surface;
     phase = 'rally';
     m.swingT = SWING;
     if (!m.cpu) hub.rumble(hub.players.get(m.id), 25);
@@ -290,19 +331,25 @@ function createRacketGame(hub, cfg) {
     const x = ball.fromX + (ball.toX - ball.fromX) * t;
     const y = ball.fromY + (ball.toY - ball.fromY) * t;
     let h;
-    if (t < BOUNCE) { const s = t / BOUNCE; h = A.contact * (1 - s) + 4 * A.peak * s * (1 - s); }
+    if (t < BOUNCE) { const s = t / BOUNCE; h = (ball.h0 != null ? ball.h0 : A.contact) * (1 - s) + 4 * A.peak * s * (1 - s); }
     else { const s = Math.min(t, 1.6) - BOUNCE; const k = s / (1 - BOUNCE); h = A.contact * k + 4 * A.peak2 * k * (1 - k); }
     return { x, y, h };
+  }
+
+  // The server's tossed ball, bobbing over the hitting shoulder (a third of the way
+  // from the body to the contact point, on the racket side).
+  function tossPos(s, m) {
+    const o = memberObjs.get(m);
+    const z = toZ(lineN(s));
+    const toss = Math.abs(Math.sin(performance.now() / 300));
+    const x = o ? o.root.position.x + (toX(m.py) - o.root.position.x) * 0.35 : toX(m.py);
+    return { x, y: C.surface + A.contact * (1 + toss * 1.1), z: z + (s === 0 ? 1 : -1) * 0.2 };
   }
 
   function ballWorld() {
     if (phase === 'serve') {
       const { s, m } = serverInfo();
-      const o = memberObjs.get(m);
-      const z = toZ(lineN(s));
-      const toss = Math.abs(Math.sin(performance.now() / 300));
-      const x = o ? o.root.position.x + (s === 0 ? 1 : -1) * cfg.reach * 0.35 : toX(m.py);
-      return { x, y: C.surface + A.contact * (1 + toss * 1.1), z: z + (s === 0 ? 1 : -1) * 0.2 };
+      return tossPos(s, m);
     }
     if (!ball) return null;
     const n = ballNorm();
@@ -329,7 +376,7 @@ function createRacketGame(hub, cfg) {
   const camState = [null, null];
   let ballMesh, blob, ring;
   const trail = [];
-  const memberObjs = new Map(); // member -> { root, armR, armL, legL, legR, head, tag, phase }
+  const memberObjs = new Map(); // member -> { root, tag, ch (animated) | armR, armL, legL, legR, head, phase (chibi) }
   let lastFrame = performance.now();
 
   function canvasTexture(w, h, paint) {
@@ -393,8 +440,39 @@ function createRacketGame(hub, cfg) {
   }
 
   function clearMembers3D() {
-    for (const o of memberObjs.values()) if (scene) scene.remove(o.root);
+    for (const o of memberObjs.values()) {
+      if (o.ch) { o.ch.dispose(); o.ring.material.dispose(); }
+      if (scene) scene.remove(o.root);
+    }
     memberObjs.clear();
+  }
+
+  // Animated character for a side (cfg.characters, js/character.js), or null to use
+  // the chibi template (also the fallback when the character's file didn't load).
+  function animalFor(s) {
+    if (!cfg.characters || !window.MabarChars) return null;
+    const id = cfg.characters[s % cfg.characters.length];
+    return MabarChars.ready(id) ? id : null;
+  }
+
+  // Player colour under the animals' feet (the chibis wear it on their shirts).
+  let ringGeo = null;
+  function colorRing(color) {
+    ringGeo = ringGeo || new THREE.RingGeometry(0.24, 0.31, 40);
+    const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity: 0.85, depthWrite: false,
+    }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.03;       // just above the stadium court's painted surface
+    ring.renderOrder = 1;
+    return ring;
+  }
+
+  function celebrate(s, clip) {
+    for (const m of sides[s].members) {
+      const o = memberObjs.get(m);
+      if (o && o.ch) o.ch.play(clip);
+    }
   }
 
   const HAIR = ['#4a2c1d', '#2b1d16', '#7a4a2a', '#c58b4a', '#3a3a46'];
@@ -405,6 +483,19 @@ function createRacketGame(hub, cfg) {
     let i = 0;
     for (let s = 0; s < 2; s++) {
       for (const m of sides[s].members) {
+        const animal = animalFor(s);
+        if (animal) {
+          const k = cfg.characterScale || 1.8;
+          const ch = MabarChars.create(animal, { scale: k, rotationY: s === 0 ? 0 : Math.PI, tool: cfg.tool });
+          const tag = nameSprite(m.name, m.color);
+          tag.position.y = (MabarChars.defs[animal].height || 1) + 0.14;
+          tag.scale.multiplyScalar(1 / k);
+          const ring = colorRing(m.color);
+          ch.root.add(tag, ring);
+          scene.add(ch.root);
+          memberObjs.set(m, { root: ch.root, tag, ring, ch, yaw: s === 0 ? 0 : Math.PI, vx: 0, lastX: null, lastSwing: 0, serving: false });
+          continue;
+        }
         const root = template.clone(true);
         const color = new THREE.Color(m.color);
         const hair = new THREE.Color(HAIR[(i++ * 3 + s) % HAIR.length]);
@@ -434,7 +525,49 @@ function createRacketGame(hub, cfg) {
     }
   }
 
+  function poseAnimal(m, s, o, dt) {
+    const dirZ = lineN(s);
+    // The animals hold the racket in their right hand, the chibis on the other side:
+    // stand so the ball arrives on the forehand.
+    const x = toX(m.py) + (s === 0 ? 1 : -1) * cfg.reach;
+    const vx = o.lastX == null ? 0 : (x - o.lastX) / Math.max(dt, 1e-3);
+    o.lastX = x;
+    o.vx += (vx - o.vx) * Math.min(1, dt * 10);
+    o.root.position.set(x, 0, dirZ * (C.line + cfg.standBack));
+    o.ch.setVelocity(o.vx, 0);
+    o.ch.setStance(phase === 'serve' || phase === 'rally' ? 'ready' : 'idle');
+    // Upper body: racket back as the ball comes, forehand on a swing. The server holds
+    // the first frame of cfg.serveClip ('serve': trophy pose, ball tossed; default
+    // 'swing': racket back) and plays it when the serve goes.
+    const server = phase === 'serve' && serverInfo().m === m;
+    const serveClip = cfg.serveClip || 'swing';
+    let ready = 0;
+    if (phase === 'rally' && ball && ball.receiver === m) {
+      const u = (1 - ball.t) * ball.T;
+      ready = Math.max(0, Math.min(1, 1 - (u - 0.1) / 0.6));
+    }
+    o.ch.setReady(server ? 1 : ready, server ? serveClip : 'swing');
+    if (m.swingT > o.lastSwing + 1e-6) {
+      if (!o.serving || serveClip === 'swing') o.ch.swing(0.42);
+      else if (phase !== 'serve') o.ch.swing(0.4, serveClip, 6 / 30);   // racket already dropping: contact at once
+    }
+    o.lastSwing = m.swingT;
+    o.serving = server;
+    // Square to the net, shuffling sideways; turn into a run only for dashes the
+    // shuffle can't keep up with, and back to the net to hit.
+    const base = s === 0 ? 0 : Math.PI;
+    const lim = o.ch.strafeLimit();
+    const dash = lim ? Math.max(0, Math.min(1, (Math.abs(o.vx) - lim * 0.8) / (lim * 0.6))) : Math.min(1, Math.abs(o.vx) / cfg.runSpeed);
+    const turn = Math.sign(o.vx) * dash * (lim ? 1.35 : 1.2) * (1 - ready) * (m.swingT > 0 ? 0 : 1);
+    o.yaw += (base + turn * (s === 0 ? 1 : -1) - o.yaw) * Math.min(1, dt * 9);
+    o.root.rotation.y = o.yaw;
+    const bw = ball && ballWorld();
+    o.ch.look(bw ? Math.max(-0.5, Math.min(0.5, (bw.x - x) * 0.12 * (s === 0 ? 1 : -1))) : 0);
+    o.ch.update(dt);
+  }
+
   function poseMember(m, s, o, dt) {
+    if (o.ch) { poseAnimal(m, s, o, dt); return; }
     const dirZ = lineN(s);
     // Stand so the racket (held out to the side) meets the ball.
     const x = toX(m.py) - (s === 0 ? 1 : -1) * cfg.reach;
@@ -572,7 +705,7 @@ function createRacketGame(hub, cfg) {
     const seated = players.slice(0, SEATS);
     const wide = W >= 760;
     const cw = Math.min(800, W - 32);
-    const ch = wide ? 400 : 560;
+    const ch = wide ? 420 : 640;
     const x0 = (W - cw) / 2, y0 = Math.max(12, (H - ch) / 2);
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,0.25)';
@@ -598,8 +731,10 @@ function createRacketGame(hub, cfg) {
     ctx.fillText(cfg.name.toUpperCase(), cx, ty);
     ctx.fillStyle = '#6b665e';
     ctx.font = hub.font(500, 14);
-    const mode = seated.length >= 3 ? 'Doubles, 2 vs 2' : 'Singles, 1 vs 1';
-    ctx.fillText(players.length ? `${mode}. ${cfg.matchLabel}. AI fills empty seats.` : 'Waiting for the first player', cx, ty + 30);
+    const L = lineup();
+    const a = sideCount(L, 0), b = sideCount(L, 1);
+    const fmt = a === b ? `${formatName(a, b)}, ${a} vs ${b}` : `${a} vs ${b}`;
+    ctx.fillText(players.length ? `${fmt}. ${cfg.matchLabel}. AI fills open seats.` : `${fmt}. Waiting for players, or watch the AI.`, cx, ty + 30);
 
     const secs = players.length ? Math.max(0, Math.ceil(roomT)) : ROOM_TIME;
     ctx.fillStyle = '#1d2433';
@@ -611,10 +746,19 @@ function createRacketGame(hub, cfg) {
 
     const gap = 8;
     const sw = (rw - gap * (SEATS - 1)) / SEATS;
-    const sy = ty + 140, sh = 96;
+    const sy = ty + 150, sh = 96;
+    roomHits = [];
+    const teams = [0, 1].map((t) => {
+      const id = cfg.characters && cfg.characters[t % cfg.characters.length];
+      const def = id && window.MabarChars && MabarChars.defs[id];
+      return def ? `Team ${def.name}` : t ? 'Far side' : 'Near side';
+    });
     for (let i = 0; i < SEATS; i++) {
       const sx = rx + i * (sw + gap);
       const p = seated[i];
+      ctx.fillStyle = '#b3aa9c';
+      ctx.font = hub.font(700, 10);
+      ctx.fillText(teams[i % 2].toUpperCase(), sx + sw / 2, sy - 9);
       if (p) {
         ctx.fillStyle = '#f3efe8';
         rr(ctx, sx, sy, sw, sh, 14); ctx.fill();
@@ -628,15 +772,27 @@ function createRacketGame(hub, cfg) {
         ctx.font = hub.font(600, 12);
         ctx.fillText(voted ? '✓ voted' : 'not voted', sx + sw / 2, sy + 77);
       } else {
+        const open = !!L[i];
         ctx.setLineDash([5, 5]);
-        ctx.strokeStyle = '#d6cfc4';
+        ctx.strokeStyle = open ? '#d6cfc4' : '#e8e2d8';
         rr(ctx, sx + 0.5, sy + 0.5, sw - 1, sh - 1, 14); ctx.stroke();
         ctx.setLineDash([]);
-        ctx.fillStyle = '#a39c90';
+        ctx.fillStyle = open ? '#a39c90' : '#cfc8bc';
         ctx.font = hub.font(700, 14);
-        ctx.fillText('AI', sx + sw / 2, sy + 40);
+        ctx.fillText(open ? 'AI' : 'Closed', sx + sw / 2, sy + 40);
         ctx.font = hub.font(500, 11);
-        ctx.fillText('open seat', sx + sw / 2, sy + 60);
+        ctx.fillText(open ? 'open seat' : 'no one plays here', sx + sw / 2, sy + 60);
+        // [x] closes the seat, [+] reopens it (also keys 1-4)
+        const bx = sx + sw - 15, by = sy + 15, hov = hoverHit && hoverHit.seat === i;
+        ctx.fillStyle = hov ? (open ? '#ff6b6b' : '#1fae4b') : open ? '#d6cfc4' : '#e3ddd3';
+        ctx.beginPath(); ctx.arc(bx, by, 11, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = hov ? '#ffffff' : '#5d584f';
+        ctx.font = hub.font(800, 16);
+        ctx.fillText(open ? '×' : '+', bx, by + 1);
+        ctx.fillStyle = '#c4bcb0';
+        ctx.font = hub.font(600, 10);
+        ctx.fillText(`key ${i + 1}`, sx + sw / 2, sy + 80);
+        roomHits.push({ x: sx, y: sy, w: sw, h: sh, seat: i, act: () => toggleSeat(i) });
       }
     }
     ctx.fillStyle = '#5d584f';
@@ -645,13 +801,51 @@ function createRacketGame(hub, cfg) {
     const line = !players.length ? 'Up to 4 players. Hold your phone like a racket.'
       : need > 0 ? `Tap “Vote to start” on your phone. ${need} more vote${need > 1 ? 's' : ''} to start now.`
         : 'Starting…';
-    ctx.fillText(line, cx, sy + sh + 30);
+    ctx.fillText(line, cx, sy + sh + 28);
     if (players.length > SEATS) {
       ctx.fillStyle = '#9a9286';
       ctx.font = hub.font(500, 12);
-      ctx.fillText(`${players.length - SEATS} watching. They’ll get the next match.`, cx, sy + sh + 52);
+      ctx.fillText(`${players.length - SEATS} watching. They’ll get the next match.`, cx, sy + sh + 48);
     }
+    // Start now (host): starts with AI in the open seats, or an AI-only demo.
+    const label = players.length ? '▶  Start now' : '▶  Watch AI play';
+    ctx.font = hub.font(700, 14);
+    const bw = ctx.measureText(label).width + 64, bh = 34;
+    const bx = cx - bw / 2, by = sy + sh + (players.length > SEATS ? 62 : 46);
+    const hov = hoverHit && hoverHit.start;
+    ctx.fillStyle = hov ? cfg.color : '#1d2433';
+    rr(ctx, bx, by, bw, bh, bh / 2); ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(label, cx - 10, by + bh / 2 + 1);
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = hub.font(700, 11);
+    ctx.fillText('F', bx + bw - 22, by + bh / 2 + 1);
+    roomHits.push({ x: bx, y: by, w: bw, h: bh, start: true, act: forceStart });
   }
+
+  function forceStart() { if (phase === 'room') startMatch(); }
+
+  // Host-screen input for the room card (mouse, and keys F / 1-4).
+  let hoverHit = null;
+  const arena = document.querySelector('#arena');
+  const hitAt = (e) => roomHits.find((h) => e.clientX >= h.x && e.clientX <= h.x + h.w && e.clientY >= h.y && e.clientY <= h.y + h.h) || null;
+  const onPointer = (e) => {
+    hoverHit = phase === 'room' ? hitAt(e) : null;
+    arena.style.cursor = hoverHit ? 'pointer' : '';
+  };
+  const onClick = (e) => { const h = phase === 'room' && hitAt(e); if (h) h.act(); };
+  const onKey = (e) => {
+    if (e.repeat || (e.target && /INPUT|TEXTAREA/.test(e.target.tagName))) return;
+    if (e.code === 'KeyF') {
+      if (phase === 'room') forceStart();
+      else if (demo) toRoom();
+    } else if (phase === 'room' && /^Digit[1-4]$/.test(e.code)) {
+      toggleSeat(Number(e.code.slice(5)) - 1);
+    }
+  };
+  arena.addEventListener('pointermove', onPointer);
+  arena.addEventListener('click', onClick);
+  window.addEventListener('keydown', onKey);
 
   function drawScoreboard(ctx) {
     const { W } = hub;
@@ -761,6 +955,13 @@ function createRacketGame(hub, cfg) {
       ctx.globalAlpha = 1;
     }
 
+    if (demo) {
+      ctx.textAlign = 'center';
+      ctx.font = hub.font(600, 13);
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.fillText('AI demo · F: back to the waiting room · Esc: menu', W / 2, H - 18);
+    }
+
     if (phase === 'over' && result) {
       ctx.fillStyle = 'rgba(14,15,19,0.5)';
       ctx.fillRect(0, 0, W, H);
@@ -773,7 +974,8 @@ function createRacketGame(hub, cfg) {
       ctx.fillText(result.sub, W / 2, H / 2 + 14);
       ctx.fillStyle = 'rgba(244,244,245,0.7)';
       ctx.font = hub.font(500, 16);
-      ctx.fillText(`Back to the waiting room in ${Math.ceil(phaseT)}…`, W / 2, H / 2 + 50);
+      const next = demo && !hub.players.size ? 'Next AI match' : 'Back to the waiting room';
+      ctx.fillText(`${next} in ${Math.ceil(phaseT)}…`, W / 2, H / 2 + 50);
     }
   }
 
@@ -781,7 +983,16 @@ function createRacketGame(hub, cfg) {
   // Game interface
   // =====================================================================
   let stopped = false;
-  Promise.all([Kit3D.load(cfg.env, (p) => { loadP = p; }), Kit3D.load('assets/characters.glb')])
+  const animals = cfg.characters && window.MabarChars
+    ? Promise.all(cfg.characters.map((id) => MabarChars.load(id).catch(() => null))) // failure -> chibi
+    : Promise.resolve([]);
+  const onP = (p) => { loadP = p; };
+  const envP = Kit3D.load(cfg.env, onP).catch((err) => {
+    if (!cfg.envFallback) throw err;
+    console.warn(`[mabar] ${cfg.env} failed, using ${cfg.envFallback}`, err);
+    return Kit3D.load(cfg.envFallback, onP);
+  });
+  Promise.all([envP, Kit3D.load('assets/characters.glb'), animals])
     .then(([env, chars]) => {
       if (stopped) return;
       try { setup(env, chars); } catch (e) { loadError = '3D isn’t supported on this browser'; console.error(e); }
@@ -793,6 +1004,10 @@ function createRacketGame(hub, cfg) {
 
     stop() {
       stopped = true;
+      arena.removeEventListener('pointermove', onPointer);
+      arena.removeEventListener('click', onClick);
+      window.removeEventListener('keydown', onKey);
+      arena.style.cursor = '';
       hub.showLobby(true);
       clearMembers3D();
       if (scene) scene.clear(); // keep the cached glTF reusable
@@ -909,6 +1124,8 @@ function createRacketGame(hub, cfg) {
             phase = 'over';
             phaseT = 6;
             ball = null;
+            celebrate(result.w, 'victory');
+            celebrate(1 - result.w, 'defeat');
             for (const m of sides[result.w].members) if (!m.cpu) hub.rumble(hub.players.get(m.id), 300);
           } else {
             startServe();
@@ -916,7 +1133,10 @@ function createRacketGame(hub, cfg) {
         }
       } else if (phase === 'over') {
         phaseT -= dt;
-        if (phaseT <= 0) toRoom();
+        if (phaseT <= 0) {
+          if (demo && !hub.players.size) startMatch(); // AI demo: next match
+          else toRoom();
+        }
       }
 
       // Players glide toward where the ball will arrive (receiver) or home.
@@ -965,14 +1185,18 @@ function createRacketGame(hub, cfg) {
     },
 
     _fastForward: (sec) => { roomT -= sec; },
+    _forceStart: () => forceStart(),
+    _toggleSeat: (i) => toggleSeat(i),
+    _lineup: () => lineup().map((x) => (x ? (x.human ? x.human.name : 'AI') : 'closed')),
     _debug: () => ({
-      phase, roomT: Math.round(roomT * 10) / 10, votes: votes.size, doubles,
+      phase, roomT: Math.round(roomT * 10) / 10, votes: votes.size, doubles, demo,
       teams: sides.map((sd) => sd.members.map((m) => (m.cpu ? 'AI:' : '') + m.name)),
       scores: [sides[0].score, sides[1].score], games: [sides[0].games, sides[1].games], rally,
       views: renderer ? views().length : 0,
       ball: ball && { t: ball.t, T: ball.T, hitter: ball.hitter, out: ball.out, receiver: ball.receiver && ball.receiver.name },
       server: phase === 'serve' ? serverInfo().m.name : null,
       call: TENNIS ? tennisCall() : null,
+      looks: [...memberObjs.values()].map((o) => (o.ch ? `${o.ch.id}:${o.ch.overlay ? o.ch.overlay.name : 'moving'}` : 'chibi')),
     }),
   };
 }

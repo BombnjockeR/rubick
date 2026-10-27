@@ -17,31 +17,33 @@ Core experience goals visible in the product:
 | Game | Controls | Players | Shape |
 | --- | --- | --- | --- |
 | Main menu | Gamepad / keyboard | any | 3D island diorama; characters play each game on a loop; "Coming soon" slot |
-| Tennis | Motion | 1–4 (singles/doubles, AI fill) | Auto-run; timing aims, swing strength sets speed; real tennis scoring, first to 2 games |
-| Table Tennis | Motion | 1–4 (AI fill) | Same engine; first to 5; split screen when both sides are human |
+| Tennis | Motion | 1–4 (any lineup, AI fill) | Island court, Team Bunny vs Team Pup; auto-move (side steps, runs for long dashes); timing aims, swing strength sets speed; overhead serve; real tennis scoring, first to 2 games |
+| Table Tennis | Motion | 1–4 (any lineup, AI fill) | Same engine and animals (with paddles); sports hall; first to 5; split screen when both sides are human |
 | Cooking | Gamepad | 1–4 co-op | Chop, cook soups, plate, serve orders against timers; 3-minute shift, 1–3 stars |
 
-Each game opens with a waiting room showing the join QR and room code. Removed earlier: Snake and Arena (commit `45b5e62`).
+Each game opens with a waiting room showing the join QR and room code. In the racket games the host chooses the lineup (owner request, 2026-10-27): each empty seat can be closed or reopened (× / +, keys 1–4), so 1v1, 2v2, 1v2 and so on all work, as long as each side keeps a player; AI plays the open seats. *Start now* (`F`) starts immediately; with nobody joined it runs an AI-only demo that repeats, for watching the game and its animations without phones. Removed earlier: Snake and Arena (commit `45b5e62`).
 
 ## Visual direction
 
-**Established (in code):** rounded, saturated "toy diorama" look; warm hemisphere + key lighting; chibi human characters built procedurally in Blender; player identity by shirt/accent color and a floating name tag. Fonts: Fredoka/Rubik.
-
-**Direction (references in `art/reference/`, models in `art/source/`, not integrated):**
-- Anthropomorphic animal characters: a cream **Bunny** with olive cargo shorts, white tee and sneakers holding a tennis racket, and a **Puppy** (the model file is named "dog"), each with front/left/right/back turnarounds.
-- A **Tropical Bunny Tennis Island** environment: a tennis court on a cliff island with palm trees, wooden stands full of animal spectators, piers, a waterfall, and bunny banners.
-- Matching FBX models exist for the bunny, dog and island court (textured, apparently unrigged; see [knowledge/fbx-source-assets.md](../knowledge/fbx-source-assets.md)).
+**Established (in code):** rounded, saturated "toy diorama" look; warm hemisphere + key lighting; player identity by a floating name tag in the player's color (plus shirt color on chibis, a colored ring under the animals). Fonts: Fredoka/Rubik.
+- Anthropomorphic animal characters in the racket games: a cream **Bunny** (olive cargo shorts, white tee, sneakers) and a **Pup** (red varsity jacket; the model file is named "dog"), rigged and animated from the AI-generated models in `art/source/` (turnarounds in `art/reference/`).
+- Tennis is played on the **Tropical Bunny Tennis Island** (palm trees, wooden stands of animal spectators, bunny banners, sea), with a regulation court laid over the model's own.
+- Chibi human characters (procedural, in Blender) remain in Cooking and as the fallback when the animal files can't load.
+- The landing page is a floating-island diorama in the sky (the AI-generated "floating island game" model, cleaned up and completed in `art/landing_island.py`): the three game islands around a plaza with a gold cat statue, an airship, hot-air balloons, a windmill, pennants and clouds. Page chrome: sky gradient, glass cards, Fredoka headlines (owner reference: HKDI's "Design Island" page, 2026-10-27).
 
 ## Character system
 
-**Established:** three character templates (`ch_tennis`, `ch_tt`, `ch_chef`), all the same chibi body with different outfits. Animated procedurally through named pivots; colors assigned per player slot (8 slot colors). Players don't choose a character.
+**Established (owner decision, 2026-10-27):** Tennis and Table Tennis use the skinned animals (clips: idle, ready, walk, run, strafeL/R, jump, victory, defeat, swing, serve); the near side (side 0) is the Bunny, the far side the Pup, so doubles is Team Bunny vs Team Pup. Tennis uses the island; Table Tennis keeps the sports hall for now ("update the table tennis environment later") with the same animals holding paddles instead of rackets. Cooking keeps its chibi chefs (`ch_chef`), colored per player slot. Players don't choose a character.
+
+**Established (owner request, 2026-10-27: "fix anything odd or unnatural, even if the model has to change"):** players behave like tennis players. They wait in a two-handed ready position during play, side-step for short moves and run only for long dashes, without sliding feet; servers toss and serve overhead in Tennis (Table Tennis serves with the forehand); the ball arrives on the racket side; winners celebrate and losers hang their heads. Both models originally had the left hand fused to the hip or a pocket; it was cut free and re-posed in the build (`art/animals.py`). The owner will supply future characters in a T-pose.
+
+The character system already supports per-character tools, accessories on sockets (hat, back, hands) and outfits (texture swap and/or accessories), but no cosmetics exist yet.
 
 **Undecided:**
-- Whether the animal characters replace the chibi humans, or become selectable alongside them.
-- Whether players pick a character (and where: phone or lobby), and how that interacts with slot colors.
-- Whether characters will be rigged/skinned (needed for the FBX models to animate like the reference) or adapted to the current pivot system.
-- Whether the island environment replaces the tennis stadium or becomes an additional venue.
-- Which character goes with which game, and whether the Bunny is the brand mascot (the banners in the island reference suggest it).
+- Whether players pick their animal (and where: phone or lobby), and how that interacts with slot colors.
+- More animals, and whether Cooking gets animal chefs.
+- The Table Tennis environment.
+- Whether the Bunny is the brand mascot (the island banners suggest it).
 
 ## Other open product decisions (Undecided)
 

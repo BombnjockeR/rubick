@@ -17,7 +17,7 @@ import bpy  # noqa: E402
 from rlib import (Geo, Chibi, mat, glow, empty, key, smooth, bounce_arc, tree, pine, bush,  # noqa: E402
                   lamp, fence, crate, traffic_cone, racket, knife, pan, hammer, reset, TAU)
 
-args = [a for a in sys.argv[1:] if not a.startswith('-')]
+args = [a for a in (sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else sys.argv[1:]) if not a.startswith('-')]
 OUT_GLB = args[0] if args else 'menu.glb'
 PREVIEW = args[1] if len(args) > 1 else None
 

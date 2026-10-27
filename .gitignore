@@ -7,3 +7,5 @@ __pycache__/
 # Source art kept local only (large binaries; see docs/ASSET_PIPELINE.md)
 art/source/
 art/reference/
+# Rigged .blend files and raw exports from `art/animals.py art/build --blend`
+art/build/

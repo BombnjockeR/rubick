@@ -12,7 +12,7 @@
           const loader = new THREE.GLTFLoader();
           loader.setMeshoptDecoder(THREE.MeshoptDecoder); // assets are meshopt-compressed
           loader.load(
-            new URL(url, window.location.href).href,
+            new URL(url, document.baseURI).href, // same as the page URL unless a <base> is set
             (gltf) => {
               gltf.scene.traverse((o) => {
                 if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }

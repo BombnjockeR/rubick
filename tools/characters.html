@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Dev tool: every relative URL resolves from the site root, like the game pages. -->
+  <base href="../">
+  <title>Mabar — Character viewer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2318181b'/%3E%3Ccircle cx='32' cy='32' r='18' fill='none' stroke='%237CFC4A' stroke-width='6'/%3E%3C/svg%3E">
+  <style>
+    :root { --bg: #f4ede2; --panel: rgba(255, 255, 255, 0.92); --ink: #1d2433; --muted: #6b665e; --accent: #1e6bff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
+    canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+    #ui { position: fixed; top: 12px; left: 12px; width: 270px; max-height: calc(100vh - 24px); overflow: auto; background: var(--panel); border-radius: 14px; padding: 14px; box-shadow: 0 6px 30px rgba(0, 0, 0, 0.15); }
+    h1 { font-size: 16px; margin: 0 0 10px; }
+    label { display: block; margin: 8px 0 2px; color: var(--muted); font-size: 12px; }
+    select, input[type=number] { width: 100%; padding: 5px 6px; border: 1px solid #d6cfc4; border-radius: 8px; font: inherit; background: #fff; }
+    input[type=range] { width: 100%; }
+    .row { display: flex; gap: 6px; }
+    .row > * { flex: 1; min-width: 0; }
+    button { margin: 3px 2px 0 0; padding: 6px 10px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+    button.ghost { background: #e7e1d7; color: var(--ink); }
+    #status { margin-top: 10px; font-size: 12px; color: var(--muted); white-space: pre-wrap; }
+    #status.bad { color: #c92a2a; }
+  </style>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <div id="ui">
+    <h1>Character viewer</h1>
+    <label for="who">Character</label>
+    <select id="who"></select>
+    <label for="tool">Tool</label>
+    <select id="tool"><option value="racket">Tennis racket</option><option value="paddle">Table-tennis paddle</option><option value="">None</option></select>
+    <label for="stance">Standing still</label>
+    <select id="stance"><option value="idle">Relaxed (idle)</option><option value="ready">Ready position (ready)</option></select>
+    <label for="speed">Forward <span id="speedVal">0.0</span> m/s (stand → walk → run)</label>
+    <input id="speed" type="range" min="0" max="5" step="0.1" value="0">
+    <label for="side">Sideways <span id="sideVal">0.0</span> m/s (− right, + left: shuffle)</label>
+    <input id="side" type="range" min="-3" max="3" step="0.1" value="0">
+    <label><input id="travel" type="checkbox"> Move the character at that velocity (judge foot sliding)</label>
+    <div>
+      <button data-play="jump">Jump</button>
+      <button data-play="victory">Victory</button>
+      <button data-play="defeat">Defeat</button>
+      <button id="swing">Swing</button>
+      <button id="serve">Serve</button>
+      <button id="stop" class="ghost">Stop overlay</button>
+    </div>
+    <label for="ready">Hold first frame <span id="readyVal">0</span></label>
+    <select id="readyClip"><option value="swing">Racket back (swing)</option><option value="serve">Trophy pose (serve)</option></select>
+    <input id="ready" type="range" min="0" max="1" step="0.05" value="0">
+    <label>Position (x, y, z)</label>
+    <div class="row"><input id="px" type="number" step="0.1" value="0"><input id="py" type="number" step="0.1" value="0"><input id="pz" type="number" step="0.1" value="0"></div>
+    <div class="row">
+      <div><label for="ry">Rotation Y (°)</label><input id="ry" type="number" step="15" value="0"></div>
+      <div><label for="sc">Scale</label><input id="sc" type="number" step="0.1" value="1.8"></div>
+    </div>
+    <div>
+      <button id="hat" class="ghost">Toggle test hat</button>
+      <button id="turn" class="ghost">Auto-turn</button>
+    </div>
+    <div id="status">Loading…</div>
+  </div>
+
+  <script src="vendor/three.mabar.min.js"></script>
+  <script src="js/kit3d.js"></script>
+  <script src="js/character.js"></script>
+  <script>
+  (() => {
+    'use strict';
+    const $ = (s) => document.querySelector(s);
+    // A deliberately missing file, to check how loading failures are handled.
+    MabarChars.define('missing', { name: 'Missing file (test)', url: 'assets/does-not-exist.glb' });
+
+    const canvas = $('#view');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.toneMapping = THREE.NeutralToneMapping;
+    renderer.toneMappingExposure = 1.05;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color('#f4ede2');
+    Kit3D.lights(scene, { size: 6, target: [0, 0, 0], sun: [4, 9, 6] });
+    const floor = new THREE.Mesh(new THREE.CircleGeometry(4, 48), new THREE.MeshStandardMaterial({ color: '#e3d8c6', roughness: 0.9 }));
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+    const grid = new THREE.GridHelper(8, 32, '#c9bba5', '#d5c9b6');   // 25 cm squares, to judge foot sliding
+    grid.position.y = 0.002;
+    scene.add(grid);
+    const camera = new THREE.PerspectiveCamera(35, 1, 0.05, 100);
+    let autoTurn = false, camYaw = 0.5;
+
+    const state = { id: null, char: null, hat: null, error: null };
+    const who = $('#who');
+    for (const [id, d] of Object.entries(MabarChars.defs)) {
+      const o = document.createElement('option');
+      o.value = id;
+      o.textContent = d.name || id;
+      who.append(o);
+    }
+
+    function status(text, bad) {
+      const el = $('#status');
+      el.textContent = text;
+      el.className = bad ? 'bad' : '';
+    }
+
+    function transform() {
+      const c = state.char;
+      if (!c) return;
+      c.root.position.set(+$('#px').value || 0, +$('#py').value || 0, +$('#pz').value || 0);
+      c.root.rotation.y = (+$('#ry').value || 0) * Math.PI / 180;
+      c.root.scale.setScalar(+$('#sc').value || 1);
+    }
+
+    function show(id) {
+      if (state.char) { state.char.dispose(); state.char = null; state.hat = null; }
+      state.id = id;
+      state.error = null;
+      who.value = id;
+      status(`Loading ${id}…`);
+      return MabarChars.load(id).then(() => {
+        if (state.id !== id) return;
+        state.char = MabarChars.create(id, { tool: $('#tool').value || null });
+        scene.add(state.char.root);
+        transform();
+        state.char.setStance($('#stance').value);
+        move();
+        hold();
+        const clips = Object.keys(state.char.actions).join(', ');
+        status(`${MabarChars.defs[id].name}: ${clips}\nSockets: ${Object.keys(state.char.bones).filter((b) => b.startsWith('sock')).join(', ')}`);
+      }).catch((err) => {
+        if (state.id !== id) return;
+        state.error = String(err && err.message || err);
+        status(`Couldn’t load “${id}”: ${state.error}\nThe game would fall back to the classic characters.`, true);
+      });
+    }
+
+    who.addEventListener('change', () => show(who.value));
+    $('#tool').addEventListener('change', (e) => state.char && state.char.setTool(e.target.value || null));
+    // Forward / sideways sliders -> a world velocity, relative to where the character faces.
+    function velocity() {
+      const c = state.char;
+      if (!c) return [0, 0];
+      const a = c.root.rotation.y, f = +$('#speed').value, l = +$('#side').value;
+      return [f * Math.sin(a) + l * Math.cos(a), f * Math.cos(a) - l * Math.sin(a)];
+    }
+    function move() {
+      $('#speedVal').textContent = (+$('#speed').value).toFixed(1);
+      $('#sideVal').textContent = (+$('#side').value).toFixed(1);
+      if (state.char) state.char.setVelocity(...velocity());
+    }
+    $('#speed').addEventListener('input', move);
+    $('#side').addEventListener('input', move);
+    $('#stance').addEventListener('change', (e) => state.char && state.char.setStance(e.target.value));
+    function hold() {
+      $('#readyVal').textContent = $('#ready').value;
+      if (state.char) state.char.setReady(+$('#ready').value, $('#readyClip').value);
+    }
+    $('#ready').addEventListener('input', hold);
+    $('#readyClip').addEventListener('change', hold);
+    for (const b of document.querySelectorAll('[data-play]')) b.addEventListener('click', () => state.char && state.char.play(b.dataset.play));
+    $('#swing').addEventListener('click', () => state.char && state.char.swing(0.4));
+    $('#serve').addEventListener('click', () => state.char && state.char.swing(0.7, 'serve'));
+    $('#stop').addEventListener('click', () => state.char && state.char.stop());
+    for (const id of ['px', 'py', 'pz', 'ry', 'sc']) $('#' + id).addEventListener('input', transform);
+    $('#turn').addEventListener('click', () => { autoTurn = !autoTurn; });
+    $('#hat').addEventListener('click', () => {
+      const c = state.char;
+      if (!c) return;
+      if (state.hat) { c.detach(state.hat); state.hat = null; return; }
+      // A party hat on the head socket: shows how accessories ride along with the animation.
+      const hat = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.16, 20), new THREE.MeshStandardMaterial({ color: '#ff4b6e', roughness: 0.5 }));
+      hat.castShadow = true;
+      if (c.attach('sockHat', hat, { position: [0, 0.07, 0] })) state.hat = hat;
+    });
+
+    function resize() {
+      const w = window.innerWidth, h = window.innerHeight;
+      renderer.setSize(w, h, false);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let last = performance.now();
+    function frame(now = performance.now()) {
+      requestAnimationFrame(frame);
+      const dt = Math.min(0.1, (now - last) / 1000);
+      last = now;
+      if (autoTurn) camYaw += dt * 0.4;
+      if (state.char && $('#travel').checked) {   // walk off and wrap around, 4 m either way
+        const [vx, vz] = velocity(), p = state.char.root.position;
+        p.x += vx * dt; p.z += vz * dt;
+        if (Math.hypot(p.x, p.z) > 4) p.set(-p.x * 0.98, p.y, -p.z * 0.98);
+      }
+      const target = new THREE.Vector3(0, 0.9, 0);
+      if (state.char) target.copy(state.char.root.position).add(new THREE.Vector3(0, 0.5 * state.char.root.scale.x, 0));
+      const dist = 2.2 + (state.char ? state.char.root.scale.x : 1.8);
+      camera.position.set(target.x + Math.sin(camYaw) * dist, target.y + 0.6, target.z + Math.cos(camYaw) * dist);
+      camera.lookAt(target);
+      if (state.char) state.char.update(dt);
+      renderer.render(scene, camera);
+    }
+    show(who.value).then(frame);
+
+    // Handle for automated checks (tools/smoke.mjs).
+    window.__viewer = {
+      show, state, scene, camera, renderer,
+      setView(yaw) { camYaw = yaw; },
+      setTransform(p = [0, 0, 0], rotY = 0, scale = 1.8) {
+        $('#px').value = p[0]; $('#py').value = p[1]; $('#pz').value = p[2];
+        $('#ry').value = rotY; $('#sc').value = scale;
+        transform();
+      },
+      bonePos(name) {
+        const b = state.char && state.char.bone(name);
+        if (!b) return null;
+        return b.getWorldPosition(new THREE.Vector3()).toArray().map((v) => +v.toFixed(4));
+      },
+    };
+  })();
+  </script>
+</body>
+</html>

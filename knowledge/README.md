@@ -13,3 +13,6 @@ Belongs elsewhere: architecture → `docs/ARCHITECTURE.md`, workflows → `docs/
 ## Notes
 
 - [fbx-source-assets.md](fbx-source-assets.md) — what the FBX models in `art/source/` contain and how their textures are linked
+- [blender-headless-pipeline.md](blender-headless-pipeline.md) — Blender 5.3 CLI quirks: arguments, frame rate on FBX import, weights, glTF clips, meshopt
+- [threejs-skinned-characters.md](threejs-skinned-characters.md) — cloning, culling, blending and layering skinned characters with the vendor three.js
+- [island-court.md](island-court.md) — how the island's court was measured and the numbers `art/island.py` uses

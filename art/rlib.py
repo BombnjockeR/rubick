@@ -71,18 +71,28 @@ class Geo:
         self.mats = []
         self._tmp = bpy.data.meshes.new('_tmp')
 
-    def _merge(self, b, material, m4):
+    def _merge(self, b, material, m4, smooth=True):
         bmesh.ops.transform(b, matrix=m4, verts=b.verts)
         if material not in self.mats:
             self.mats.append(material)
         mi = self.mats.index(material)
         for f in b.faces:
             f.material_index = mi
-            f.smooth = True
+            f.smooth = smooth
         b.to_mesh(self._tmp)
         b.free()
         self.bm.from_mesh(self._tmp)
         return self
+
+    def poly(self, pts, m, smooth=False):
+        """One face through world points (a flag, a cap)."""
+        b = bmesh.new()
+        b.faces.new([b.verts.new(Vector(p)) for p in pts])
+        return self._merge(b, m, Matrix.Identity(4), smooth)
+
+    def prim(self, b, m, m4=None, smooth=True):
+        """Merge a bmesh built by hand (all its faces get material m)."""
+        return self._merge(b, m, m4 or Matrix.Identity(4), smooth)
 
     # --- primitives (sizes are full extents; loc is the center) ---
     def box(self, size, loc, m, bevel=0.015, seg=2, rot=(0, 0, 0)):

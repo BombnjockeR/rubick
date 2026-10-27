@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Mabar — party games, your phone is the controller</title>
   <meta name="description" content="Open Mabar on a laptop or TV, friends scan a QR code, and everyone plays with their own phone. Tennis, table tennis and a co-op kitchen. No app, no account.">
-  <meta name="theme-color" content="#bfe3ff">
+  <meta name="theme-color" content="#8ccfff">
   <meta property="og:type" content="website">
   <meta property="og:title" content="Mabar — your phone is the controller">
   <meta property="og:description" content="Party games on the big screen. Friends scan a QR code and play with their phones. No app, no account.">
@@ -18,128 +18,139 @@
   <link rel="stylesheet" href="css/landing.css">
 </head>
 <body>
-  <a class="skip" href="#main">Skip to content</a>
+  <a class="skip" href="#copy">Skip to content</a>
 
-  <header class="nav">
+  <!-- The island: a 3D scene you can turn, with pins on the things worth knowing.
+       Without WebGL (or if the model fails to load) a still image takes its place. -->
+  <div class="stage" id="stage" aria-hidden="true">
+    <div class="sky"></div>
+    <canvas id="island"></canvas>
+    <picture><source media="(max-width: 760px)" srcset="assets/img/hero-phone.jpg"><img id="islandStill" src="assets/img/hero.jpg" alt="" hidden></picture>
+    <div class="pins" id="pins"></div>
+  </div>
+
+  <header class="top">
     <a class="logo" href="./" aria-label="Mabar home"><span class="logo-mark" aria-hidden="true"></span>Mabar</a>
-    <nav aria-label="Sections">
-      <a href="#how">How it works</a>
-      <a href="#games">Games</a>
-      <a href="watch.html">Watch from afar</a>
+    <nav class="top-nav" aria-label="Sections">
+      <button class="chip" type="button" data-open="how">How it works</button>
+      <a class="chip" href="watch.html">Watch from afar</a>
+      <a class="btn btn-small host-only" href="play.html">Host a game</a>
     </nav>
-    <a class="btn btn-small host-only" href="play.html">Host a game</a>
   </header>
 
-  <main id="main">
-    <!-- Hero: the live island (desktop) or a still of it (phones) -->
-    <section class="hero" aria-labelledby="hero-title">
-      <div class="hero-stage" aria-hidden="true">
-        <canvas id="island"></canvas>
-        <picture><source media="(max-width: 760px)" srcset="assets/img/hero-phone.jpg"><img id="islandStill" src="assets/img/hero.jpg" alt="" hidden></picture>
+  <section class="copy" id="copy" aria-labelledby="hero-title">
+    <p class="kicker">Party games on the big screen</p>
+    <h1 id="hero-title">Your phone is the controller.</h1>
+    <p class="lead">Open Mabar on a laptop or TV, friends scan a QR code, and you’re playing in seconds. No app, no account.</p>
+    <div class="cta host-only">
+      <a class="btn btn-big" href="play.html">Host a game</a>
+      <span class="cta-note">Runs right here in this browser</span>
+    </div>
+    <form class="join" id="joinForm" autocomplete="off">
+      <label for="code">Got a room code from a friend?</label>
+      <div class="join-row">
+        <input id="code" name="code" maxlength="4" autocapitalize="characters" spellcheck="false" placeholder="ABCD" inputmode="text" aria-describedby="joinMsg">
+        <button class="btn btn-join" type="submit">Join</button>
       </div>
-      <div class="hero-copy">
-        <h1 id="hero-title">Your phone is the controller.</h1>
-        <p class="lead">Open Mabar on a laptop or TV, friends scan a QR code, and you’re playing in seconds. No app, no account.</p>
+      <p id="joinMsg" class="join-msg" role="status"></p>
+    </form>
+    <p class="phone-only phone-note">To host, open this page on a laptop or TV browser. Phones are the controllers.</p>
+    <p class="fine"><strong>Mabar</strong> comes from <em>main bareng</em>: playing together.</p>
+  </section>
 
-        <div class="cta host-only">
-          <a class="btn btn-big" href="play.html">Host a game</a>
-          <span class="cta-note">Runs right here in this browser</span>
-        </div>
+  <nav class="dock" id="dock" aria-label="Explore the island"></nav>
+  <p class="hint" id="hint"><span class="hint-icon" aria-hidden="true"></span>Drag to turn the island, tap a pin to look closer</p>
 
-        <form class="join" id="joinForm" autocomplete="off">
-          <label for="code">Got a room code from a friend?</label>
-          <div class="join-row">
-            <input id="code" name="code" maxlength="4" autocapitalize="characters" spellcheck="false" placeholder="ABCD" inputmode="text" aria-describedby="joinMsg">
-            <button class="btn btn-join" type="submit">Join</button>
-          </div>
-          <p id="joinMsg" class="join-msg" role="status"></p>
-        </form>
-
-        <p class="phone-only phone-note">To host, open this page on a laptop or TV browser and choose Host a game. Phones are the controllers.</p>
+  <!-- One floating panel per pin. data-anchor names the node in assets/landing_island.glb the pin sits on. -->
+  <div class="panels" id="panels">
+    <section class="panel" id="panel-tennis" data-hot="tennis" data-anchor="hot_tennis" data-title="Tennis" data-color="#2f7dff" role="dialog" aria-labelledby="t-tennis" hidden>
+      <img class="panel-img" src="assets/img/tennis.jpg" alt="Tennis: the bunny about to serve on the island court, the pup waiting at the far baseline" loading="lazy" width="1280" height="720">
+      <div class="panel-body">
+        <p class="panel-kicker">Swing your phone</p>
+        <h2 id="t-tennis">Tennis</h2>
+        <p>Your player runs to the ball. You decide when to swing and how hard: early sends it left, late sends it right. Real scoring, from 15–love to advantage.</p>
+        <p class="facts"><span>Motion controls</span><span>1 to 4 players</span><span>Singles or doubles</span></p>
+        <a class="btn host-only" href="play.html?game=tennis">Host Tennis</a>
       </div>
     </section>
 
-    <!-- How it works: a real sequence, so it is numbered -->
-    <section class="how" id="how" aria-labelledby="how-title">
-      <h2 id="how-title">Three steps to a party</h2>
-      <ol class="steps">
-        <li style="--c: var(--blue)">
-          <span class="step-n" aria-hidden="true">1</span>
-          <h3>Open it on the big screen</h3>
-          <p>A laptop works, or a laptop plugged into the TV. Click Host a game.</p>
-        </li>
-        <li style="--c: var(--purple)">
-          <span class="step-n" aria-hidden="true">2</span>
-          <h3>Pick a game, share the QR</h3>
-          <p>Each game opens with a lobby and a QR code. Friends point their phone camera at it.</p>
-        </li>
-        <li style="--c: var(--tomato)">
-          <span class="step-n" aria-hidden="true">3</span>
-          <h3>Play with your phone</h3>
-          <p>Swing it like a racket or use it as a gamepad. Empty seats are filled by AI players.</p>
-        </li>
-      </ol>
+    <section class="panel" id="panel-tt" data-hot="tt" data-anchor="hot_tt" data-title="Table Tennis" data-color="#8b5cf6" role="dialog" aria-labelledby="t-tt" hidden>
+      <img class="panel-img" src="assets/img/tabletennis.jpg" alt="Table tennis: the bunny serving to the pup across a blue table in the sports hall" loading="lazy" width="1280" height="720">
+      <div class="panel-body">
+        <p class="panel-kicker">Swing your phone</p>
+        <h2 id="t-tt">Table Tennis</h2>
+        <p>Short, fast rallies across the table. A timing ring tells you when the ball is in reach, and with players on both sides the screen splits so each gets their own view.</p>
+        <p class="facts"><span>Motion controls</span><span>1 to 4 players</span><span>First to 5</span></p>
+        <a class="btn host-only" href="play.html?game=pingpong">Host Table Tennis</a>
+      </div>
     </section>
 
-    <!-- Games: alternating rows -->
-    <section class="games" id="games" aria-labelledby="games-title">
-      <h2 id="games-title">What you can play</h2>
-
-      <article class="game" style="--c: var(--blue)">
-        <img src="assets/img/tennis.jpg" alt="Tennis: a player in green about to serve on a blue court in a packed stadium" loading="lazy" width="1280" height="720">
-        <div class="game-copy">
-          <h3>Tennis</h3>
-          <p>Your player runs to the ball. You decide when to swing and how hard: swing early to send it left, late to send it right. Real scoring, from 15–love to advantage.</p>
-          <p class="game-facts"><span>Swing your phone</span><span>1 to 4 players</span><span>Singles or doubles</span></p>
-        </div>
-      </article>
-
-      <article class="game game-flip" style="--c: var(--purple)">
-        <img src="assets/img/tabletennis.jpg" alt="Table tennis: two players at a blue table in a purple sports hall" loading="lazy" width="1280" height="720">
-        <div class="game-copy">
-          <h3>Table Tennis</h3>
-          <p>Short, fast rallies across the table. The timing ring tells you when the ball is in reach. With two of you, the screen splits so each side gets its own view.</p>
-          <p class="game-facts"><span>Swing your phone</span><span>1 to 4 players</span><span>First to 5</span></p>
-        </div>
-      </article>
-
-      <article class="game" style="--c: var(--tomato)">
-        <img src="assets/img/cooking.jpg" alt="Cooking: a chef in a checkered kitchen with crates, stoves and a serving window" loading="lazy" width="1280" height="720">
-        <div class="game-copy">
-          <h3>Cooking</h3>
-          <p>Chop, cook, plate and serve together before the orders run out. Soups burn if you forget them, and somebody always does.</p>
-          <p class="game-facts"><span>Phone gamepad</span><span>1 to 4 chefs</span><span>Co-op</span></p>
-        </div>
-      </article>
+    <section class="panel" id="panel-cook" data-hot="cook" data-anchor="hot_cook" data-title="Cooking" data-color="#ff4b3e" role="dialog" aria-labelledby="t-cook" hidden>
+      <img class="panel-img" src="assets/img/cooking.jpg" alt="Cooking: a chef in a checkered kitchen with crates, stoves and a serving window" loading="lazy" width="1280" height="720">
+      <div class="panel-body">
+        <p class="panel-kicker">Phone gamepad</p>
+        <h2 id="t-cook">Cooking</h2>
+        <p>Chop, cook, plate and serve together before the orders run out. Soups burn if you forget them, and somebody always does.</p>
+        <p class="facts"><span>Gamepad</span><span>1 to 4 chefs</span><span>Co-op</span></p>
+        <a class="btn host-only" href="play.html?game=cooking">Host Cooking</a>
+      </div>
     </section>
 
-    <section class="faq" aria-labelledby="faq-title">
-      <h2 id="faq-title">Good to know</h2>
-      <dl>
-        <div>
-          <dt>Nothing to install</dt>
-          <dd>Everything runs in the browser. Friends only need a phone with a camera to scan the code.</dd>
-        </div>
-        <div>
-          <dt>Any network</dt>
-          <dd>Phones don’t have to share your Wi-Fi. Mobile data works too.</dd>
-        </div>
-        <div>
-          <dt>A friend in another city</dt>
-          <dd>They open the <a href="watch.html">watch page</a> on their own laptop or iPad to see your game live, then join with their phone.</dd>
-        </div>
-        <div>
-          <dt>On iPhone</dt>
-          <dd>Tap Allow when asked about motion. That’s how your swings are detected.</dd>
-        </div>
-      </dl>
+    <section class="panel" id="panel-how" data-hot="how" data-anchor="hot_plaza" data-title="How it works" data-color="#f2b705" role="dialog" aria-labelledby="t-how" hidden>
+      <div class="panel-body">
+        <p class="panel-kicker">How it works</p>
+        <h2 id="t-how">Three steps to a party</h2>
+        <ol class="steps">
+          <li><strong>Open it on the big screen.</strong> A laptop works, or a laptop plugged into the TV. Click Host a game.</li>
+          <li><strong>Pick a game, share the QR.</strong> Each lobby shows a QR code and a room code. Friends point their phone camera at it.</li>
+          <li><strong>Play with your phone.</strong> Swing it like a racket or use it as a gamepad. AI fills the empty seats.</li>
+        </ol>
+        <a class="btn host-only" href="play.html">Host a game</a>
+      </div>
     </section>
-  </main>
 
-  <footer class="foot">
-    <p><strong>Mabar</strong> comes from <em>main bareng</em>: playing together.</p>
-    <p class="foot-links"><a href="play.html">Host a game</a><a href="controller.html">Join with a code</a><a href="watch.html">Watch page</a></p>
-  </footer>
+    <section class="panel" id="panel-host" data-hot="host" data-anchor="hot_entry" data-title="Start here" data-color="#e8463a" role="dialog" aria-labelledby="t-host" hidden>
+      <div class="panel-body">
+        <p class="panel-kicker">Start here</p>
+        <h2 id="t-host">Host a game</h2>
+        <p>A laptop works, or a laptop plugged into the TV. Everything runs in the browser, so there is nothing to install for you or your friends.</p>
+        <p class="facts"><span>No app</span><span>No account</span><span>Up to 8 phones</span></p>
+        <a class="btn host-only" href="play.html">Host a game</a>
+        <p class="phone-only panel-note">On a phone, you join: type the room code from the big screen into the box on this page.</p>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-watch" data-hot="watch" data-anchor="hot_airship" data-title="Watch from afar" data-color="#2bb3c0" role="dialog" aria-labelledby="t-watch" hidden>
+      <div class="panel-body">
+        <p class="panel-kicker">Friends far away</p>
+        <h2 id="t-watch">Watch from afar</h2>
+        <p>Someone in another city opens the watch page on their own laptop or iPad, sees your game live, and joins with their phone like everyone else.</p>
+        <p class="facts"><span>Live video</span><span>Any network</span></p>
+        <a class="btn" href="watch.html">Open the watch page</a>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-know" data-hot="know" data-anchor="hot_clock" data-title="Good to know" data-color="#5fb84a" role="dialog" aria-labelledby="t-know" hidden>
+      <div class="panel-body">
+        <p class="panel-kicker">Good to know</p>
+        <h2 id="t-know">Seconds to start</h2>
+        <dl class="know">
+          <div><dt>Nothing to install</dt><dd>Friends only need a phone with a camera to scan the code.</dd></div>
+          <div><dt>Any network</dt><dd>Phones don’t have to share your Wi-Fi. Mobile data works too.</dd></div>
+          <div><dt>Drop in, drop out</dt><dd>Phones stay connected between games, and AI takes over when someone leaves.</dd></div>
+          <div><dt>On iPhone</dt><dd>Tap Allow when asked about motion. That’s how your swings are detected.</dd></div>
+        </dl>
+      </div>
+    </section>
+  </div>
+
+  <div class="loading" id="loading" aria-hidden="true">
+    <div class="loading-card">
+      <span class="logo-mark big"></span>
+      <p>Mabar</p>
+      <div class="bar"><span id="loadBar"></span></div>
+    </div>
+  </div>
 
   <script src="js/common.js"></script>
   <script src="js/landing.js"></script>

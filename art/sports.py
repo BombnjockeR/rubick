@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bpy  # noqa: E402
 from rlib import Geo, Chibi, mat, glow, reset, racket, tree, pine, bush, lamp, TAU  # noqa: E402
 
-OUT = [a for a in sys.argv[1:] if not a.startswith('-')]
+OUT = [a for a in (sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else sys.argv[1:]) if not a.startswith('-')]
 OUT = OUT[0] if OUT else 'assets'
 os.makedirs(OUT, exist_ok=True)
 PI = math.pi

@@ -7,7 +7,10 @@
     "dev": "http-server . -p 8080 -c-1",
     "dev:https": "http-server . -p 8443 -c-1 -S -C .cert/cert.pem -K .cert/key.pem",
     "cert": "mkdir -p .cert && mkcert -key-file .cert/key.pem -cert-file .cert/cert.pem localhost 127.0.0.1 $(ipconfig getifaddr en0 2>/dev/null || hostname -I | awk '{print $1}')",
-    "assets": "GLTF_TRANSFORM=./node_modules/.bin/gltf-transform ./art/build.sh"
+    "assets": "GLTF_TRANSFORM=./node_modules/.bin/gltf-transform ./art/build.sh",
+    "assets:animals": "GLTF_TRANSFORM=./node_modules/.bin/gltf-transform ./art/build.sh animals island",
+    "assets:landing": "GLTF_TRANSFORM=./node_modules/.bin/gltf-transform ./art/build.sh landing",
+    "smoke": "node tools/smoke.mjs"
   },
   "devDependencies": {
     "@gltf-transform/cli": "^4.2.1",

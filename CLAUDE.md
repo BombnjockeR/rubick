@@ -16,14 +16,17 @@ Read first, depending on the task:
 npm install                         # dev tools only (http-server, gltf-transform)
 npm run dev                         # http://localhost:8080  (landing) and /play.html (host)
 npm run cert && npm run dev:https   # https://<lan-ip>:8443 — needed for phone motion sensors
-BPY=python3.13 npm run assets       # rebuild assets/*.glb from art/*.py (needs `pip install bpy`)
+npm run assets:animals              # rebuild bunny.glb, dog.glb, island_court.glb (Blender app + art/source/)
+npm run assets:landing              # rebuild landing_island.glb, the landing page's island (same requirements)
+npm run assets                      # rebuild every assets/*.glb (BLENDER=/path or BPY=python3.13 to choose Blender)
+npm run smoke                       # with `npm run dev` running: headless-Chrome smoke test (--full plays whole matches)
 ```
 
-There is no test suite, linter or build step for the code. `node --check <file>` catches syntax errors.
+There is no unit test suite, linter or build step for the code. `node --check <file>` catches syntax errors; `npm run smoke` covers the characters (clips, poses, foot sliding), the racket games' waiting room, both racket games, asset fallbacks and every page.
 
 ## Code conventions
 
-- Classic `<script>` tags, no modules. Each file is an IIFE or registers onto a global: `MABAR`, `MabarGames` (js/common.js), `Kit3D` (js/kit3d.js), `MabarRacket` (js/games/racket.js), `THREE` (vendor bundle). **Script order in the HTML matters.**
+- Classic `<script>` tags, no modules. Each file is an IIFE or registers onto a global: `MABAR`, `MabarGames` (js/common.js), `Kit3D` (js/kit3d.js), `MabarChars` (js/character.js, after kit3d), `MabarRacket` (js/games/racket.js), `THREE` (vendor bundle). **Script order in the HTML matters.**
 - A game is one file in `js/games/` calling `MabarGames.register({...})`, plus a `<script>` tag in `play.html` before `js/screen.js`. Racket sports are configs passed to `MabarRacket.define`.
 - 2-space indent, single quotes, semicolons, `'use strict'` inside IIFEs. Python (art/) uses 4 spaces.
 - Comments explain *why* or describe the gameplay rule; keep that density, not more.
@@ -40,13 +43,15 @@ There is no test suite, linter or build step for the code. `node --check <file>`
 ## Assets
 
 - `assets/` is **game-ready runtime files only** (meshopt `.glb`, `img/*.jpg`). Everything in it ships to Pages.
-- `assets/*.glb` are generated: edit `art/*.py` and rebuild, never hand-edit the `.glb`. Node and material names (`ch_tennis_armR`, `shirt`, `plat_tennis`, `k_stove`, …) are an API the JS looks up by name; renaming one breaks the game silently.
+- `assets/*.glb` are generated: edit `art/*.py` and rebuild, never hand-edit the `.glb`. Node, bone, material and clip names (`ch_tennis_armR`, `shirt`, `plat_tennis`, `k_stove`, the animals' bones/`sock*`/`prop_*`/clips …) are an API the JS looks up by name; renaming one breaks the game silently. The full contract is in docs/ASSET_PIPELINE.md.
+- The animals (`bunny.glb`, `dog.glb`) and `island_court.glb` are built from `art/source/` by `art/animals.py` / `art/island.py`; character landmarks and skinning rules live in `art/animals.py`, clips in `art/clips.py`. Check rig changes with `art/preview_clips.py` and `tools/characters.html`.
+- The landing page's island (`landing_island.glb`) is built from `art/source/environments/landingpage/` by `art/landing_island.py`; its node names (`hot_*` anchors, `land`, `rocks`, `tree_*`, `bunt_*`, `cloud_*` …) are looked up by `js/landing.js`. Pieces are picked by rule (shape, colour, what they stand on), not by id.
 - `art/source/` (original FBX + textures) and `art/reference/` (concept art) are **gitignored, local-only**. Never move them into `assets/`, never delete or overwrite originals; write converted output elsewhere.
 - `vendor/` is third-party (PeerJS, qrcode-generator, a custom Three.js bundle). Don't edit it; replace whole files and update versions in README.
 
 ## Testing expectations
 
-After a change, at minimum: `node --check` the edited JS, serve the site and load every affected page with the browser console open (no errors, no 404s). For game changes, play it on `play.html` with the keyboard player (`WASD`, `Space`, `E`). Phone, motion and cross-network behaviour need real devices; if you couldn't test something, say so explicitly. Never report something as tested if it wasn't.
+After a change, at minimum: `node --check` the edited JS, serve the site and load every affected page with the browser console open (no errors, no 404s); `npm run smoke` does this for the main paths. For game changes, play it on `play.html` with the keyboard player (`WASD`, `Space`, `E`). Phone, motion and cross-network behaviour need real devices; if you couldn't test something, say so explicitly. Never report something as tested if it wasn't.
 
 ## Git and deployment
 
