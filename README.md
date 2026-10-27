@@ -8,13 +8,15 @@ Turn your phone into a game controller. The laptop shows the game, phones join w
 2. On your phone, scan the QR code or open `controller.html` and type the code.
 3. Turn the phone sideways and play. Friends scan the same QR code to join (up to 8).
 
-Pick the game in the panel on the laptop. Switching games keeps everyone connected.
+The laptop opens on a **3D main menu** (a toy-diorama island built in Blender, with characters playing each game on a loop). Choose with the phone's stick or d-pad and press **A**, or use the arrow keys + Enter / click on the laptop. The ⌂ button on the phone or `Esc` on the laptop goes back to the menu; everyone stays connected.
 
 | Game | How to play |
 | --- | --- |
-| **Snake** | Everyone presses **A** to ready up. Steer with stick or d-pad, eat white apples to grow. Hit a wall or any snake and you're out; your body turns into pellets. Last snake standing wins. |
+| **Tennis** | Coming next. |
 | **Table Tennis** | 3D, motion controls. Scan in to a **waiting room** (60s, 4 seats); tap **Vote to start** on your phone or let the timer run out. 1–2 players play singles, 3–4 play doubles (each covers half the table); **AI fills empty seats** and takes over if someone leaves. Hold your phone like a paddle and swing: *when* you swing aims (early = your left, late = your right, way off = out), *how hard* sets speed. The camera sits behind your end and follows the ball; with humans on both sides the screen splits in two. First to 5. |
-| **Arena** | Free roam. Grab coins, **A** dashes (and knocks friends back), **B** honks. |
+| **Cooking** | Coming next: Overcooked-style co-op kitchen. |
+
+Stars on the menu cards are placeholders for a future popularity vote.
 
 No phone? On the laptop, `WASD` moves, `Space` is A, `E` is B, `H` hides the panel.
 
@@ -56,7 +58,9 @@ Add `?peer=host:port` to the screen URL to use your own [PeerJS server](https://
 | Path | What |
 | --- | --- |
 | `index.html`, `js/screen.js`, `css/screen.css` | Laptop hub: room, QR, roster, game switching |
-| `js/games/*.js` | One file per game (see the interface in `js/common.js`) |
+| `js/games/*.js` | One file per game (see the interface in `js/common.js`); `menu.js` is the main menu |
+| `js/kit3d.js` | Shared Three.js renderer, lighting and cached `.glb` loader |
+| `art/*.py`, `assets/*.glb` | Blender scripts (run with the `bpy` module) and the 3D models they export. Re-run `python art/menu_scene.py assets/menu.glb` after editing. |
 | `controller.html`, `js/controller.js`, `css/controller.css` | Phone gamepad |
 | `watch.html`, `js/watch.js`, `css/watch.css` | Remote screen: live video of the game + QR for the remote player's phone |
 | `js/common.js` | Shared constants, button bitmask, PeerJS options |

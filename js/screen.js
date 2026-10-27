@@ -35,7 +35,12 @@
     },
     rumble(p, ms) { this.send(p, { t: 'rumble', ms }); },
     refreshRoster() { rosterDirty = true; },
-    showLobby(show) { setLobbyVisible(show); },
+    // show the side panel; chip=false also hides the little room-code chip
+    showLobby(show, chip = true) { setLobbyVisible(show, chip); },
+    setGame(id) { setTimeout(() => setGame(id), 0); }, // deferred: safe to call from inside a game
+    goMenu() { this.setGame('menu'); },
+    get code() { return code; },
+    get joinUrl() { return code ? joinLink() : ''; },
     // Direction the player is pushing: stick if it's moved, otherwise d-pad.
     dir(p) {
       let x = p.sx, y = p.sy;
@@ -143,9 +148,12 @@
     return new URL('controller.html', window.location.href).href;
   }
 
+  function joinLink() {
+    return `${controllerUrl()}?room=${code}` + (R.peerServer ? `&peer=${encodeURIComponent(R.peerServer)}` : '');
+  }
+
   function showRoom() {
-    const join = `${controllerUrl()}?room=${code}` +
-      (R.peerServer ? `&peer=${encodeURIComponent(R.peerServer)}` : '');
+    const join = joinLink();
     $('#code').textContent = code;
     const a = $('#joinUrl');
     a.href = join;
@@ -227,6 +235,9 @@
         break;
       case 'action':
         if (game && game.action) game.action(p);
+        break;
+      case 'menu':
+        if (gameDef && gameDef.id !== 'menu') setGame('menu');
         break;
     }
   }
@@ -329,10 +340,8 @@
       p.actionSent = null;
       hub.send(p, { t: 'mode', mode: controlMode() });
     }
-    for (const btn of document.querySelectorAll('#games button')) {
-      btn.setAttribute('aria-pressed', String(btn.dataset.game === def.id));
-    }
     $('#gameBlurb').textContent = def.blurb || '';
+    $('#menuBtn').hidden = def.id === 'menu';
     tellViewers({ t: 'game', game: def.name });
     const url = new URL(window.location.href);
     url.searchParams.set('game', def.id);
@@ -340,17 +349,7 @@
     rosterDirty = true;
   }
 
-  function buildGamePicker() {
-    const wrap = $('#games');
-    for (const def of window.RubickGames.list) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.dataset.game = def.id;
-      b.textContent = def.name;
-      b.addEventListener('click', () => { if (!gameDef || gameDef.id !== def.id) setGame(def.id); });
-      wrap.append(b);
-    }
-  }
+  $('#menuBtn').addEventListener('click', () => setGame('menu'));
 
   // Phone hint line ("Press A when ready", …) and optional action button
   // ("Vote to start"). Only sent when they change.
@@ -377,7 +376,8 @@
 
   window.addEventListener('keydown', (e) => {
     if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
-    if (e.code === 'KeyH' && !e.repeat) { toggleLobby(); return; }
+    if (e.code === 'KeyH' && !e.repeat) { if (gameDef && gameDef.id !== 'menu') toggleLobby(); return; }
+    if (e.code === 'Escape' && gameDef && gameDef.id !== 'menu') { setGame('menu'); return; }
     if (!KB_KEYS.has(e.code)) return;
     e.preventDefault();
     keys.add(e.code);
@@ -435,9 +435,9 @@
   }
   setInterval(() => { if (hub.players.size) rosterDirty = true; }, 1000);
 
-  function setLobbyVisible(show) {
+  function setLobbyVisible(show, chip = true) {
     $('#lobby').hidden = !show;
-    $('#chip').hidden = show;
+    $('#chip').hidden = show || !chip;
   }
   function toggleLobby() { setLobbyVisible($('#lobby').hidden); }
   $('#toggle').addEventListener('click', toggleLobby);
@@ -467,8 +467,7 @@
   window.addEventListener('beforeunload', () => { if (peer) peer.destroy(); });
 
   resize();
-  buildGamePicker();
-  setGame(new URLSearchParams(location.search).get('game') || 'snake');
+  setGame(new URLSearchParams(location.search).get('game') || 'menu');
   startHost();
   requestAnimationFrame(frame);
 

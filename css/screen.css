@@ -83,6 +83,24 @@ button.ghost {
 }
 button.ghost:hover { color: var(--text); border-color: rgba(255, 255, 255, 0.2); }
 
+.menu-btn {
+  width: 100%;
+  font: inherit;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.menu-btn:hover { background: rgba(255, 255, 255, 0.12); }
+.menu-btn[hidden] { display: none; }
+
 .games {
   display: grid;
   grid-auto-flow: column;

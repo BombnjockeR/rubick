@@ -207,6 +207,10 @@
     });
   }
 
+  for (const btn of document.querySelectorAll('.js-menu')) {
+    btn.addEventListener('click', () => { sendRaw({ t: 'menu' }); haptic(15); });
+  }
+
   $('#actionBtn').addEventListener('click', () => {
     sendRaw({ t: 'action' });
     haptic(20);

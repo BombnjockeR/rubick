@@ -21,7 +21,7 @@
     </header>
 
     <div class="lobby-body">
-      <div id="games" class="games" role="group" aria-label="Game"></div>
+      <button id="menuBtn" class="menu-btn" type="button">◀ Main menu <kbd>Esc</kbd></button>
       <p id="gameBlurb" class="blurb"></p>
 
       <p class="step">Scan to join on your phone</p>
@@ -43,7 +43,7 @@
 
       <ul id="roster" class="roster"></ul>
 
-      <p class="hint">No phone handy? <kbd>WASD</kbd> moves, <kbd>Space</kbd> is A, <kbd>E</kbd> is B. <kbd>H</kbd> hides this panel.</p>
+      <p class="hint">No phone handy? <kbd>WASD</kbd> moves, <kbd>Space</kbd> is A, <kbd>E</kbd> is B. <kbd>H</kbd> hides this panel, <kbd>Esc</kbd> goes back to the menu.</p>
     </div>
   </aside>
 
@@ -51,10 +51,11 @@
 
   <script src="vendor/peerjs.min.js"></script>
   <script src="vendor/qrcode.js"></script>
+  <script src="vendor/three.rubick.min.js"></script>
   <script src="js/common.js"></script>
-  <script src="js/games/snake.js"></script>
+  <script src="js/kit3d.js"></script>
+  <script src="js/games/menu.js"></script>
   <script src="js/games/pingpong.js"></script>
-  <script src="js/games/arena.js"></script>
   <script src="js/screen.js"></script>
 </body>
 </html>
