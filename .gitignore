@@ -3,3 +3,7 @@ node_modules/
 .DS_Store
 *.blend1
 __pycache__/
+
+# Source art kept local only (large binaries; see docs/ASSET_PIPELINE.md)
+art/source/
+art/reference/

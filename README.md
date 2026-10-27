@@ -98,6 +98,8 @@ Add `?peer=host:port` to the host URL to use your own [PeerJS server](https://gi
 | `controller.html`, `js/controller.js`, `css/controller.css` | Phone controller (gamepad + motion) |
 | `watch.html`, `js/watch.js`, `css/watch.css` | Remote screen |
 | `art/*.py`, `art/build.sh`, `assets/*.glb` | Blender scripts and the models they export |
+| `art/source/`, `art/reference/` | Original FBX models and concept art (gitignored, local only; not loaded by the game) |
+| `docs/`, `knowledge/`, `CLAUDE.md` | Architecture, asset pipeline, design notes, dev log, verified technical notes |
 | `vendor/` | PeerJS 1.5.5, qrcode-generator 2.0.4, a Three.js 0.186 bundle with GLTFLoader + MeshoptDecoder (all MIT) |
 
 ## Writing a game
