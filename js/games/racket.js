@@ -8,14 +8,20 @@
 // "Start now" (button or F) starts at once; with nobody joined it's an AI-only
 // demo that repeats until someone joins (F goes back to the waiting room).
 //
-// Your character runs to the ball by itself (like Wii/Switch Sports). You only
-// time the swing: WHEN you swing aims the ball (early = to your left, late = to
-// your right, way off = out) and HOW HARD you swing sets the speed.
+// Your character runs to the ball by itself (like Wii/Switch Sports), no faster
+// than cfg.crossTime allows (seconds from sideline to sideline), so a ball placed
+// away from a player who is late getting back is a winner. You time the swing:
+// WHEN you swing aims the ball (early = to your left, late = to your right and
+// short, way off = out or into the net), HOW HARD sets the speed and depth, the
+// direction the phone moves pulls the ball that way and lifts it (lob) or drives
+// it down (smash), and running into the ball carries it along. Tilting the phone
+// forward or back (or the stick) moves your spot closer to the net or deeper.
 //
 // World units are meters (three.js, Y up). The court's long axis is Z with the
 // net at z = 0; side 0 plays from -Z, side 1 from +Z. The sim uses normalized
 // coords: nx -1..1 along the court (contact line to contact line), ny -1..1
-// across the playing width.
+// across the playing width. A ball flies to a landing spot, bounces, and hops on
+// to the receiver's contact point; players stand at (py across, px deep).
 window.MabarRacket = {
   define(cfg) {
     MabarGames.register({
@@ -38,12 +44,14 @@ function createRacketGame(hub, cfg) {
   const LATE_LIMIT = -0.16;  // ball is past you after this = missed
   const IDEAL = 0.08;        // perfect timing (a touch early covers network lag)
   const SPAN = 0.24;         // timing distance that maps to full left/right aim
-  const BOUNCE = 0.75;       // fraction of the flight where the ball bounces
   const SWING = 0.3;         // swing animation length (s)
+  const G = 9.8;             // the hops after the bounce are real parabolas
 
-  const C = cfg.court;       // { line, halfW, halfWDoubles, surface, onSurface(x,z) }
-  const A = cfg.arc;         // { contact, peak, peak2 }
+  const C = cfg.court;       // { line, halfW, halfWDoubles, surface, onSurface(x,z), landMax, net }
+  const A = cfg.arc;         // { contact, peak, peak2 }: heights above the playing surface (m)
+  const DEEPEST = cfg.deepest || 1.25;   // how far behind the contact line (nx) a player takes a ball
   const CPU_COLORS = ['#ced4da', '#adb5bd'];
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
   // ---------- State ----------
   let phase = 'room';        // room | intro | serve | rally | point | over
@@ -160,8 +168,22 @@ function createRacketGame(hub, cfg) {
 
   function makeMember(p, s, i) {
     return p
-      ? { id: p.id, cpu: false, name: p.name, color: p.color, lane: 0, py: 0, swingT: 0, side: s, vx: 0, run: 0 }
-      : { id: `cpu${s}${i}`, cpu: true, name: 'CPU', color: CPU_COLORS[i % 2], lane: 0, py: 0, swingT: 0, side: s, vx: 0, run: 0 };
+      ? { id: p.id, cpu: false, name: p.name, color: p.color, slot: p.slot, animal: null, lane: 0, py: 0, px: 1, bias: 0, vl: 0, swingT: 0, side: s, vx: 0, run: 0 }
+      : { id: `cpu${s}${i}`, cpu: true, name: 'CPU', color: CPU_COLORS[i % 2], slot: null, animal: null, lane: 0, py: 0, px: 1, bias: 0, vl: 0, swingT: 0, side: s, vx: 0, run: 0 };
+  }
+
+  // Which animal a phone plays as: by its seat slot, so it keeps the same one across
+  // games (js/character.js defs, in cfg.characters order). AI seats take the animals
+  // nobody in the match has, so no two players look alike.
+  const pool = cfg.characters || [];
+  const slotAnimal = (slot) => (pool.length ? pool[slot % pool.length] : null);
+  function assignAnimals() {
+    const all = [...sides[0].members, ...sides[1].members];
+    const used = new Set();
+    for (const m of all) if (!m.cpu) { m.animal = slotAnimal(m.slot); used.add(m.animal); }
+    const free = pool.filter((id) => !used.has(id));
+    let i = 0;
+    for (const m of all) if (m.cpu) { m.animal = free.length ? free[i % free.length] : slotAnimal(i); i++; }
   }
 
   // Seat i plays for side i % 2. Each entry: { human } | { ai: true } | null (closed).
@@ -199,6 +221,7 @@ function createRacketGame(hub, cfg) {
       sides[s].members.push(makeMember(x.human || null, s, sides[s].members.length));
     });
     doubles = sides.some((sd) => sd.members.length > 1);
+    assignAnimals();
     for (const sd of sides) {
       if (sd.members.length === 2) { sd.members[0].lane = -1; sd.members[1].lane = 1; }
     }
@@ -237,6 +260,7 @@ function createRacketGame(hub, cfg) {
     phase = 'point';
     phaseT = 1.7;
     celebrate(winner, 'jump');
+    if (fx) fx.cheer(matchOver >= 0 ? 2 : 1);
     popup(text, null, '#ffffff', 1.7, 1.25);
     for (const m of sides[winner].members) if (!m.cpu) hub.rumble(hub.players.get(m.id), 60);
     for (const m of sides[1 - winner].members) if (!m.cpu) hub.rumble(hub.players.get(m.id), 160);
@@ -256,40 +280,97 @@ function createRacketGame(hub, cfg) {
   }
 
   // ---------- Shots ----------
-  function launch(s, m, fromY, aimY, T, power) {
-    const toY = fromY + (aimY - fromY) / BOUNCE; // so the bounce lands at aimY
-    ball = { fromX: lineN(s), fromY, toX: lineN(1 - s), toY, t: 0, T, hitter: s, color: m.color, out: Math.abs(aimY) > 1, bounced: false, power };
-    ball.receiver = receiverOf(1 - s, toY);
+  // A shot flies from the hitter's contact point to where it lands (`depth` 0..1 down
+  // the opponent's half, 1 = the baseline / table end; `aimY` across, past ±1 = wide),
+  // bounces, and hops on to the receiver's contact point: the top of the first hop,
+  // or where it comes back down through contact height, but no deeper than DEEPEST.
+  // Horizontal motion is uniform; T is how long line-to-line would take at that speed.
+  function launch(s, m, from, aimY, depth, T, power, { peak = 1, hop = 1, kind = '' } = {}) {
+    const dir = lineN(1 - s);
+    const land = { x: dir * depth * (C.landMax || 1), y: aimY };
+    const v = 2 / T;                                      // nx per second
+    const dx = land.x - from.x, dy = land.y - from.y;
+    const Tb = Math.max(0.12, Math.hypot(dx, dy * halfW() / C.line) / v);
+    const vx = dx / Tb, vy = dy / Tb;
+    const hp = Math.max(A.contact * 0.5, A.peak * peak);  // peak of the flight to the bounce
+    const hb = Math.max(0.02, A.peak2 * hop);             // height of the first hop
+    const Ta = 2 * Math.sqrt(2 * hb / G);
+    const kb = cfg.bounceSpeed || 0.7;                    // speed kept through the bounce
+    let Tc = hb > A.contact ? Ta * (0.5 + 0.5 * Math.sqrt(1 - A.contact / hb)) : Ta * 0.5;
+    const room = (DEEPEST - Math.abs(land.x)) / Math.max(1e-3, Math.abs(vx) * kb);
+    if (room < Tc) Tc = Math.max(0.05, room);             // taken on the rise instead
+    const contact = { x: land.x + vx * kb * Tc, y: land.y + vy * kb * Tc, t: Tb + Tc };
+    let net = false, Tn = 0;                              // height when crossing the net
+    if (from.x * land.x < 0) {
+      const sn = -from.x / dx;
+      Tn = sn * Tb;
+      net = from.h * (1 - sn) + 4 * hp * sn * (1 - sn) < (C.net || 0) + cfg.ballR;
+    }
+    const long = depth > 1.02, wide = Math.abs(aimY) > 1;
+    ball = { from, h0: from.h, land, Tb, vx, vy, hp, hb, kb, contact, t: 0, T, hitter: s, color: m.color,
+      out: long || wide, long, net, Tn, bounced: false, power, kind };
+    ball.receiver = receiverOf(1 - s, contact.y);
     cpuPlan = null;
-    if (ball.receiver && ball.receiver.cpu && !ball.out) {
-      const miss = 0.05 + Math.max(0, cfg.cpuHard - T) * 0.7 + rally * 0.012;
-      cpuPlan = { u: IDEAL + (Math.random() - 0.5) * 0.3, miss: Math.random() < miss, power: 0.35 + Math.random() * 0.45, done: false };
+    if (ball.receiver && ball.receiver.cpu && !ball.out && !net) {
+      const miss = 0.03 + Math.max(0, cfg.cpuHard - T) * 0.5 + rally * 0.01;
+      cpuPlan = {
+        u: IDEAL + (Math.random() - 0.5) * 0.3, miss: Math.random() < miss, power: 0.35 + Math.random() * 0.5,
+        dir: { x: (Math.random() - 0.5) * 1.4, y: Math.random() < 0.15 ? 0.7 : (Math.random() - 0.5) * 0.6 },   // now and then a lob
+        done: false,
+      };
     }
     trailReset();
   }
 
-  function serve(power) {
+  function serve(power, dir = { x: 0, y: 0 }) {
     const { s, m } = serverInfo();
-    const aimY = Math.max(-0.85, Math.min(0.85, (Math.random() - 0.5) * 1.4));
     const tp = tossPos(s, m);   // struck where the toss is, not teleported to the contact point
-    launch(s, m, tp.x / halfW(), aimY, cfg.serveT - power * cfg.serveTP, power);
-    ball.h0 = tp.y - C.surface;
+    const from = { x: tp.z / C.line, y: tp.x / halfW(), h: tp.y - C.surface };
+    const depth = clamp(0.35 + Math.random() * 0.3 + power * 0.1, 0.3, 0.75);
+    const aimY = clamp((Math.random() - 0.5) * 1.3 - dir.x * 0.5, -0.85, 0.85);
+    launch(s, m, from, aimY, depth, cfg.serveT - power * cfg.serveTP, power, { peak: 1.1 - 0.4 * power, hop: 0.8 + 0.5 * power });
     phase = 'rally';
     m.swingT = SWING;
     if (!m.cpu) hub.rumble(hub.players.get(m.id), 25);
   }
 
-  function returnShot(s, m, power, u) {
-    const offset = Math.max(-1, Math.min(1, (u - IDEAL) / SPAN)); // + early, − late
-    const aimY = leftSign(s) * offset * 1.15 + (Math.random() - 0.5) * 0.15;
-    const speedUp = Math.max(0.72, 1 - rally * 0.025);
-    const fromY = ballNorm().y;
+  // The return. WHEN you swing aims it (early = your left, late = your right and
+  // short), HOW HARD sets the speed and depth, the phone's swing direction pulls it
+  // left or right and lifts it (lob) or drives it down (smash), and running into the
+  // ball carries it the way you were moving. Very late hits go into the net.
+  function returnShot(s, m, power, u, dir = { x: 0, y: 0 }) {
+    const offset = clamp((u - IDEAL) / SPAN, -1, 1);                     // + early, − late
+    const late = clamp((IDEAL - u) / (IDEAL - LATE_LIMIT), 0, 1);
+    const leftward = offset * 0.85 - dir.x * 0.6 + clamp(m.vl / speedLimit(), -1, 1) * 0.3;   // + = the player's left
+    const aimY = leftSign(s) * leftward * 1.15 + (Math.random() - 0.5) * 0.1;
+    const smash = power > 0.8 && Math.abs(offset) < 0.35 && dir.y < -0.2;
+    const lob = dir.y > 0.45 && !smash;
+    let depth = 0.5 + 0.45 * power + 0.2 * dir.y - 0.4 * late;
+    let peak = 1.3 - 0.7 * power + 0.5 * Math.max(0, dir.y) - 0.6 * late;
+    let hop = 0.7 + 0.6 * power;
+    let T = (cfg.shotT - power * cfg.shotTP) * Math.max(0.72, 1 - rally * 0.025);
+    let kind = '';
+    if (smash) { T *= 0.78; depth += 0.12; peak = 0.55; hop = 1.2; kind = 'smash'; }
+    else if (lob) { T *= 1.3; depth = 0.8 + 0.25 * power; peak = 1.9 + 0.6 * dir.y; hop = 1.4; kind = 'lob'; }
+    const from = { x: ball.contact.x, y: ball.contact.y, h: A.contact };
     rally++;
-    launch(s, m, fromY, aimY, (cfg.shotT - power * cfg.shotTP) * speedUp, power);
+    launch(s, m, from, aimY, clamp(depth, 0.12, 1.2), T, power, { peak, hop, kind });
     m.swingT = SWING;
-    if (!m.cpu) hub.rumble(hub.players.get(m.id), power > 0.85 ? 70 : 35);
-    if (power > 0.85) popup('SMASH!', s, m.color);
-    else if (Math.abs(offset) < 0.25) popup('Perfect', s, m.color, 0.7);
+    if (!m.cpu) hub.rumble(hub.players.get(m.id), smash ? 80 : 35);
+    if (smash) popup('SMASH!', s, m.color);
+    else if (lob) popup('Lob', s, m.color, 0.7, 0.9);
+    else if (Math.abs(offset) < 0.25 && late < 0.3) popup('Perfect', s, m.color, 0.7);
+  }
+
+  // Players run at most this fast (m/s): the court's width in cfg.crossTime seconds.
+  const speedLimit = () => (2 * halfW()) / (cfg.crossTime || 1.6);
+
+  // Can this player reach the ball at its contact point from where they stand now?
+  function inReach(m, s) {
+    if (!ball) return false;
+    const dy = Math.abs(toX(m.py) - toX(ball.contact.y));
+    const dz = Math.abs(m.px - ball.contact.x * lineN(s)) * C.line;
+    return dy <= cfg.reach * 1.5 && dz <= cfg.reach * 1.9;
   }
 
   // Remote players see the game as video (~0.15-0.2s behind) and their swing
@@ -302,19 +383,20 @@ function createRacketGame(hub, cfg) {
     return Math.max(0, Math.min(0.45, 0.18 + oneWay));
   }
 
-  function swingBy(s, m, power) {
+  function swingBy(s, m, power, dir) {
     if (m.swingT <= 0) m.swingT = SWING;
     if (phase === 'serve') {
       const sv = serverInfo();
-      if (sv.m === m && phaseT > 0.35) serve(power);
+      if (sv.m === m && phaseT > 0.35) serve(power, dir);
       return;
     }
-    if (phase !== 'rally' || !ball || ball.hitter === s || ball.out) return;
+    if (phase !== 'rally' || !ball || ball.hitter === s || ball.out || ball.net) return;
     if (ball.receiver !== m) { popup('Partner’s ball', s, '#adb5bd', 0.6, 0.8); return; }
-    const u = (1 - ball.t) * ball.T + lagOf(m);
+    const u = ball.contact.t - ball.t + lagOf(m);
     if (u > EARLY_LIMIT) { popup('Too early', s, '#adb5bd', 0.6, 0.8); return; }
     if (u < LATE_LIMIT) return;
-    returnShot(s, m, power, u);
+    if (!inReach(m, s)) { popup('Out of reach', s, '#adb5bd', 0.7, 0.8); return; }
+    returnShot(s, m, power, u, dir);
   }
 
   function toggleVote(p) {
@@ -324,17 +406,29 @@ function createRacketGame(hub, cfg) {
     hub.refreshRoster();
   }
 
-  // Ball in normalized coords; h = height above the playing surface (meters)
-  function ballNorm() {
-    if (!ball) return { x: 0, y: 0, h: 0 };
-    const t = ball.t;
-    const x = ball.fromX + (ball.toX - ball.fromX) * t;
-    const y = ball.fromY + (ball.toY - ball.fromY) * t;
-    let h;
-    if (t < BOUNCE) { const s = t / BOUNCE; h = (ball.h0 != null ? ball.h0 : A.contact) * (1 - s) + 4 * A.peak * s * (1 - s); }
-    else { const s = Math.min(t, 1.6) - BOUNCE; const k = s / (1 - BOUNCE); h = A.contact * k + 4 * A.peak2 * k * (1 - k); }
-    return { x, y, h };
+  // Ball in normalized coords `t` seconds after launch: x, y and h = height above the
+  // playing surface (m). After the bounce it hops on, lower and slower each time.
+  function ballAt(t) {
+    const b = ball;
+    if (b.net && t > b.Tn) {                           // caught by the net: drops at it
+      const sn = b.Tn / b.Tb, d = t - b.Tn;
+      return { x: 0, y: b.from.y + b.vy * b.Tn, h: Math.max(0, b.h0 * (1 - sn) + 4 * b.hp * sn * (1 - sn) - 0.5 * G * d * d) };
+    }
+    if (t <= b.Tb) {
+      const sn = t / b.Tb;
+      return { x: b.from.x + b.vx * t, y: b.from.y + b.vy * t, h: b.h0 * (1 - sn) + 4 * b.hp * sn * (1 - sn) };
+    }
+    let x = b.land.x, y = b.land.y, left = t - b.Tb, hb = b.hb, k = b.kb;
+    for (let i = 0; ; i++) {
+      const Ta = 2 * Math.sqrt(2 * hb / G);
+      if (left <= Ta || i >= 5) {
+        const u = Math.min(left, Ta);
+        return { x: x + b.vx * k * u, y: y + b.vy * k * u, h: 4 * hb * (u / Ta) * (1 - u / Ta) };
+      }
+      x += b.vx * k * Ta; y += b.vy * k * Ta; left -= Ta; hb *= 0.45; k *= 0.8;
+    }
   }
+  function ballNorm() { return ball ? ballAt(ball.t) : { x: 0, y: 0, h: 0 }; }
 
   // The server's tossed ball, bobbing over the hitting shoulder (a third of the way
   // from the body to the contact point, on the racket side).
@@ -354,16 +448,13 @@ function createRacketGame(hub, cfg) {
     if (!ball) return null;
     const n = ballNorm();
     const x = toX(n.y), z = toZ(n.x);
-    const surf = C.onSurface(x, z) && !(ball.out && ball.t > BOUNCE) ? C.surface : 0;
+    const on = C.onSurface(x, z);
     let y = C.surface + n.h;
-    if (ball.out && ball.t > BOUNCE) {
-      const dtS = (ball.t - BOUNCE) * ball.T;  // flies off and drops to the floor
-      y = C.surface + A.contact * 0.4 + 2.5 * dtS - 4.9 * dtS * dtS;
-    } else if (ball.t > 1) {
-      const dtS = (ball.t - 1) * ball.T;
-      y = C.surface + A.contact - 4.9 * dtS * dtS;
+    if (!on && ball.t > ball.Tb) {                     // past the table's edge: falls to the floor
+      const d = ball.t - ball.Tb;
+      y = C.surface + n.h * 0.3 - 0.5 * G * d * d;
     }
-    return { x, y: Math.max(surf + cfg.ballR, y), z };
+    return { x, y: Math.max((on ? C.surface : 0) + cfg.ballR, y), z };
   }
 
   // =====================================================================
@@ -371,6 +462,7 @@ function createRacketGame(hub, cfg) {
   // =====================================================================
   let renderer = null, scene = null, loadError = null, loadP = 0;
   let template = null;
+  let fx = null;   // Kit3D.liven: the venue's trees, flags, crowd, sea (nothing in the fallback stadium)
   const cams = [];
   let orbitCam = null;
   const camState = [null, null];
@@ -394,6 +486,7 @@ function createRacketGame(hub, cfg) {
     scene.background = new THREE.Color(cfg.sky);
     scene.fog = new THREE.Fog(cfg.sky, cfg.fog[0], cfg.fog[1]);
     scene.add(env.scene);
+    fx = Kit3D.liven(env);
     Kit3D.lights(scene, { size: cfg.shadowSize, target: [0, 0, 0], sun: cfg.sun });
     template = chars.scene.getObjectByName(cfg.character);
 
@@ -447,12 +540,13 @@ function createRacketGame(hub, cfg) {
     memberObjs.clear();
   }
 
-  // Animated character for a side (cfg.characters, js/character.js), or null to use
-  // the chibi template (also the fallback when the character's file didn't load).
-  function animalFor(s) {
-    if (!cfg.characters || !window.MabarChars) return null;
-    const id = cfg.characters[s % cfg.characters.length];
-    return MabarChars.ready(id) ? id : null;
+  // Animated character for a member (assignAnimals), or null to use the chibi
+  // template: the fallback when no character file loaded. If only this member's
+  // file failed, any loaded animal stands in.
+  function animalFor(m) {
+    if (!pool.length || !window.MabarChars) return null;
+    if (m.animal && MabarChars.ready(m.animal)) return m.animal;
+    return pool.find((id) => MabarChars.ready(id)) || null;
   }
 
   // Player colour under the animals' feet (the chibis wear it on their shirts).
@@ -483,7 +577,7 @@ function createRacketGame(hub, cfg) {
     let i = 0;
     for (let s = 0; s < 2; s++) {
       for (const m of sides[s].members) {
-        const animal = animalFor(s);
+        const animal = animalFor(m);
         if (animal) {
           const k = cfg.characterScale || 1.8;
           const ch = MabarChars.create(animal, { scale: k, rotationY: s === 0 ? 0 : Math.PI, tool: cfg.tool });
@@ -493,7 +587,7 @@ function createRacketGame(hub, cfg) {
           const ring = colorRing(m.color);
           ch.root.add(tag, ring);
           scene.add(ch.root);
-          memberObjs.set(m, { root: ch.root, tag, ring, ch, yaw: s === 0 ? 0 : Math.PI, vx: 0, lastX: null, lastSwing: 0, serving: false });
+          memberObjs.set(m, { root: ch.root, tag, ring, ch, yaw: s === 0 ? 0 : Math.PI, vx: 0, vz: 0, lastX: null, lastZ: null, lastSwing: 0, serving: false });
           continue;
         }
         const root = template.clone(true);
@@ -530,11 +624,15 @@ function createRacketGame(hub, cfg) {
     // The animals hold the racket in their right hand, the chibis on the other side:
     // stand so the ball arrives on the forehand.
     const x = toX(m.py) + (s === 0 ? 1 : -1) * cfg.reach;
+    const z = dirZ * (C.line * m.px + cfg.standBack);
     const vx = o.lastX == null ? 0 : (x - o.lastX) / Math.max(dt, 1e-3);
+    const vz = o.lastZ == null ? 0 : (z - o.lastZ) / Math.max(dt, 1e-3);
     o.lastX = x;
+    o.lastZ = z;
     o.vx += (vx - o.vx) * Math.min(1, dt * 10);
-    o.root.position.set(x, 0, dirZ * (C.line + cfg.standBack));
-    o.ch.setVelocity(o.vx, 0);
+    o.vz += (vz - o.vz) * Math.min(1, dt * 10);
+    o.root.position.set(x, 0, z);
+    o.ch.setVelocity(o.vx, o.vz);
     o.ch.setStance(phase === 'serve' || phase === 'rally' ? 'ready' : 'idle');
     // Upper body: racket back as the ball comes, forehand on a swing. The server holds
     // the first frame of cfg.serveClip ('serve': trophy pose, ball tossed; default
@@ -543,7 +641,7 @@ function createRacketGame(hub, cfg) {
     const serveClip = cfg.serveClip || 'swing';
     let ready = 0;
     if (phase === 'rally' && ball && ball.receiver === m) {
-      const u = (1 - ball.t) * ball.T;
+      const u = ball.contact.t - ball.t;
       ready = Math.max(0, Math.min(1, 1 - (u - 0.1) / 0.6));
     }
     o.ch.setReady(server ? 1 : ready, server ? serveClip : 'swing');
@@ -553,13 +651,17 @@ function createRacketGame(hub, cfg) {
     }
     o.lastSwing = m.swingT;
     o.serving = server;
-    // Square to the net, shuffling sideways; turn into a run only for dashes the
-    // shuffle can't keep up with, and back to the net to hit.
+    // Square to the net, shuffling sideways; turn into a run (toward wherever it is
+    // going, even back for a lob) only for dashes the shuffle can't keep up with, and
+    // back to the net to hit.
     const base = s === 0 ? 0 : Math.PI;
     const lim = o.ch.strafeLimit();
-    const dash = lim ? Math.max(0, Math.min(1, (Math.abs(o.vx) - lim * 0.8) / (lim * 0.6))) : Math.min(1, Math.abs(o.vx) / cfg.runSpeed);
-    const turn = Math.sign(o.vx) * dash * (lim ? 1.35 : 1.2) * (1 - ready) * (m.swingT > 0 ? 0 : 1);
-    o.yaw += (base + turn * (s === 0 ? 1 : -1) - o.yaw) * Math.min(1, dt * 9);
+    const speed = Math.hypot(o.vx, o.vz);
+    const dash = lim ? clamp((speed - lim * 0.8) / (lim * 0.6), 0, 1) : Math.min(1, speed / cfg.runSpeed);
+    const heading = speed > 1e-3 ? Math.atan2(o.vx * (s === 0 ? 1 : -1), o.vz * dirZ) : 0;   // + = the character's left
+    const turn = heading * dash * (1 - ready) * (m.swingT > 0 ? 0 : 1);
+    const want = base + turn;
+    o.yaw += (((want - o.yaw + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI) * Math.min(1, dt * 9);
     o.root.rotation.y = o.yaw;
     const bw = ball && ballWorld();
     o.ch.look(bw ? Math.max(-0.5, Math.min(0.5, (bw.x - x) * 0.12 * (s === 0 ? 1 : -1))) : 0);
@@ -572,7 +674,7 @@ function createRacketGame(hub, cfg) {
     // Stand so the racket (held out to the side) meets the ball.
     const x = toX(m.py) - (s === 0 ? 1 : -1) * cfg.reach;
     const prevX = o.root.position.x;
-    o.root.position.set(x, 0, dirZ * (C.line + cfg.standBack));
+    o.root.position.set(x, 0, dirZ * (C.line * m.px + cfg.standBack));
     const speed = Math.abs(x - prevX) / Math.max(dt, 1e-3);
     m.run += (Math.min(1, speed / cfg.runSpeed) - m.run) * Math.min(1, dt * 8);
     o.phase += dt * (6 + 8 * m.run);
@@ -585,7 +687,7 @@ function createRacketGame(hub, cfg) {
     let rx = -0.35, rz = 0.15;
     const incoming = phase === 'rally' && ball && ball.receiver === m;
     if (incoming) {
-      const u = (1 - ball.t) * ball.T;
+      const u = ball.contact.t - ball.t;
       const k = Math.max(0, Math.min(1, 1 - (u - 0.1) / 0.6));
       rx = -0.35 - 1.0 * k;
       rz = 0.15 + 1.15 * k;
@@ -608,6 +710,7 @@ function createRacketGame(hub, cfg) {
   function trailReset() { for (const tr of trail) { tr.live = false; if (tr.mesh) tr.mesh.visible = false; } }
 
   function updateScene(dt, time) {
+    if (fx) fx.update(dt, time / 1000);
     for (let s = 0; s < 2; s++) for (const m of sides[s].members) {
       const o = memberObjs.get(m);
       if (o) poseMember(m, s, o, dt);
@@ -640,12 +743,11 @@ function createRacketGame(hub, cfg) {
 
     // Timing ring at the receiver's contact point
     ring.material.opacity = 0;
-    if (phase === 'rally' && ball && !ball.out && ball.receiver) {
-      const u = (1 - ball.t) * ball.T;
+    if (phase === 'rally' && ball && !ball.out && !ball.net && ball.receiver) {
+      const u = ball.contact.t - ball.t;
       if (u < 0.6 && u > LATE_LIMIT) {
         const k = u <= EARLY_LIMIT ? 1 - Math.min(1, Math.abs(u - IDEAL) / 0.3) : 0.15;
-        const rs = 1 - ball.hitter;
-        ring.position.set(toX(ball.toY), C.surface + A.contact, toZ(lineN(rs)));
+        ring.position.set(toX(ball.contact.y), C.surface + A.contact, toZ(ball.contact.x));
         ring.rotation.set(0, 0, 0);
         ring.scale.setScalar(1.6 - k * 0.6);
         ring.material.color.set(ball.receiver.color);
@@ -653,14 +755,16 @@ function createRacketGame(hub, cfg) {
       }
     }
 
-    // Chase cameras: behind each team, drifting with the ball
+    // Chase cameras: behind each team, drifting with the ball, backing up when a
+    // player on that side runs deep (so they stay in the picture)
     const ease = 1 - Math.exp(-dt * 3);
     for (let s = 0; s < 2; s++) {
       const dir = lineN(s);
       const b = bw && phase !== 'room' && phase !== 'over' ? bw : null;
       const bx = b ? b.x : 0;
       const near = b ? Math.max(0, Math.min(1, (b.z * dir + C.line) / (2 * C.line))) : 0.3;
-      const want = new THREE.Vector3(bx * cfg.cam.follow, cfg.cam.height + near * cfg.cam.rise, dir * (C.line + cfg.cam.back - near * cfg.cam.push));
+      const deep = Math.max(1, ...sides[s].members.map((m) => m.px));
+      const want = new THREE.Vector3(bx * cfg.cam.follow, cfg.cam.height + near * cfg.cam.rise, dir * (C.line * deep + cfg.cam.back - near * cfg.cam.push));
       const look = new THREE.Vector3(bx * cfg.cam.follow * 0.9, cfg.cam.lookY + (b ? (b.y - C.surface) * 0.2 : 0), dir * C.line * (cfg.cam.ahead + near * cfg.cam.track));
       const st = camState[s];
       if (phase === 'intro') {
@@ -748,17 +852,17 @@ function createRacketGame(hub, cfg) {
     const sw = (rw - gap * (SEATS - 1)) / SEATS;
     const sy = ty + 150, sh = 96;
     roomHits = [];
-    const teams = [0, 1].map((t) => {
-      const id = cfg.characters && cfg.characters[t % cfg.characters.length];
-      const def = id && window.MabarChars && MabarChars.defs[id];
-      return def ? `Team ${def.name}` : t ? 'Far side' : 'Near side';
-    });
+    // Above each seat: the side it plays for, or the animal its player gets.
+    const seatLabel = (i, p) => {
+      const def = p && window.MabarChars && MabarChars.defs[slotAnimal(p.slot)];
+      return def ? def.name : i % 2 ? 'Far side' : 'Near side';
+    };
     for (let i = 0; i < SEATS; i++) {
       const sx = rx + i * (sw + gap);
       const p = seated[i];
       ctx.fillStyle = '#b3aa9c';
       ctx.font = hub.font(700, 10);
-      ctx.fillText(teams[i % 2].toUpperCase(), sx + sw / 2, sy - 9);
+      ctx.fillText(seatLabel(i, p).toUpperCase(), sx + sw / 2, sy - 9);
       if (p) {
         ctx.fillStyle = '#f3efe8';
         rr(ctx, sx, sy, sw, sh, 14); ctx.fill();
@@ -1010,6 +1114,7 @@ function createRacketGame(hub, cfg) {
       arena.style.cursor = '';
       hub.showLobby(true);
       clearMembers3D();
+      if (fx) { fx.dispose(); fx = null; }
       if (scene) scene.clear(); // keep the cached glTF reusable
       if (renderer) { renderer.dispose_(); renderer = null; }
     },
@@ -1033,15 +1138,22 @@ function createRacketGame(hub, cfg) {
       hub.refreshRoster();
     },
 
-    swing(p, power) {
+    // A phone swing: power 0..1 and, when the phone could tell, its direction
+    // ({ x: -1 left .. 1 right, y: -1 down .. 1 up }).
+    swing(p, power, dir) {
       const mm = memberOf(p);
-      if (mm) swingBy(mm.s, mm.m, power);
+      const d = dir && typeof dir === 'object' ? { x: clamp(+dir.x || 0, -1, 1), y: clamp(+dir.y || 0, -1, 1) } : { x: 0, y: 0 };
+      if (mm) swingBy(mm.s, mm.m, power, d);
     },
 
     press(p, bits) {
-      if (!(bits & B.A)) return;
-      if (phase === 'room') toggleVote(p);
-      else this.swing(p, 0.6); // gamepad / keyboard fallback
+      if (phase === 'room') { if (bits & B.A) toggleVote(p); return; }
+      // Gamepad / keyboard: A swings, B smashes; the stick or d-pad held meanwhile is
+      // the swing's direction (left / right, up = lob, down = flat).
+      if (bits & (B.A | B.B)) {
+        const d = hub.dir(p);
+        this.swing(p, bits & B.B ? 0.95 : 0.6, { x: d.x, y: -d.y });
+      }
     },
 
     action(p) { toggleVote(p); },
@@ -1103,21 +1215,22 @@ function createRacketGame(hub, cfg) {
         if (m.cpu && phaseT > 1.3) serve(0.45 + Math.random() * 0.25);
         else if (!m.cpu && phaseT > 8) serve(0.35); // auto-serve so nobody stalls
       } else if (phase === 'rally' && ball) {
-        ball.t += dt / ball.T;
-        const u = (1 - ball.t) * ball.T;
+        ball.t += dt;
         const rs = 1 - ball.hitter;
-        if (!ball.bounced && ball.t >= BOUNCE) {
+        if (ball.net && ball.t >= ball.Tn) { point(rs, 'Net!'); return; }
+        if (!ball.bounced && ball.t >= ball.Tb) {
           ball.bounced = true;
-          if (ball.out) { point(rs, 'Out!'); return; }
+          if (ball.out) { point(rs, ball.long ? 'Long!' : 'Out!'); return; }
         }
+        const u = ball.contact.t - ball.t;
         if (cpuPlan && !cpuPlan.done && u <= cpuPlan.u) {
           cpuPlan.done = true;
-          if (!cpuPlan.miss && ball.receiver) returnShot(rs, ball.receiver, cpuPlan.power, u);
+          if (!cpuPlan.miss && ball.receiver && inReach(ball.receiver, rs)) returnShot(rs, ball.receiver, cpuPlan.power, u, cpuPlan.dir);
           else if (ball.receiver) ball.receiver.swingT = SWING;
         }
-        if (ball && ball.hitter !== rs && u < LATE_LIMIT - lagOf(ball.receiver)) point(ball.hitter, `${ball.receiver ? ball.receiver.name : 'Someone'} missed`);
+        if (ball && u < LATE_LIMIT - lagOf(ball.receiver)) point(ball.hitter, `${ball.receiver ? ball.receiver.name : 'Someone'} missed`);
       } else if (phase === 'point') {
-        if (ball) ball.t += dt / ball.T;
+        if (ball) ball.t += dt;
         phaseT -= dt;
         if (phaseT <= 0) {
           if (result) {
@@ -1139,15 +1252,27 @@ function createRacketGame(hub, cfg) {
         }
       }
 
-      // Players glide toward where the ball will arrive (receiver) or home.
+      // Players run to where they will meet the ball (the receiver) or back to their
+      // spot, no faster than the speed limit, so placement wins points. The phone's
+      // tilt (or the stick) moves the spot up to half a court closer to the net or
+      // further back.
+      const vmax = speedLimit();
       for (let s = 0; s < 2; s++) {
         for (const m of sides[s].members) {
-          let target = m.lane * 0.5 * leftSign(s);
-          if (phase === 'rally' && ball && ball.receiver === m) target = Math.max(-1.3, Math.min(1.3, ball.toY));
-          else if (phase === 'serve' && serverInfo().m === m) target = m.py;
-          else if (phase === 'rally' && ball && ball.hitter !== s && sides[s].members.length === 1) target = ball.toY * 0.3;
-          const step = (target - m.py) * Math.min(1, dt * cfg.moveRate);
-          m.py += Math.max(-cfg.maxStep * dt, Math.min(cfg.maxStep * dt, step));
+          const p = m.cpu ? null : hub.players.get(m.id);
+          const want = p ? -clamp(hub.dir(p).y, -1, 1) : 0;   // + = toward the net
+          m.bias += (want * 0.45 - m.bias) * Math.min(1, dt * 2);
+          let ty = m.lane * 0.5 * leftSign(s), tx = clamp(1 - m.bias, 0.45, 1.3);
+          if (phase === 'rally' && ball && ball.receiver === m && !ball.net && !ball.out) {
+            ty = clamp(ball.contact.y, -1.4, 1.4);
+            tx = clamp(ball.contact.x * lineN(s), 0.25, DEEPEST);
+          } else if (phase === 'serve' && serverInfo().m === m) { ty = m.py; tx = 1; }
+          else if (phase === 'rally' && ball && ball.hitter === s && sides[s].members.length === 1) ty = ball.land.y * 0.25;
+          const vy = clamp((ty - m.py) * cfg.moveRate, -vmax / halfW(), vmax / halfW());
+          const vz = clamp((tx - m.px) * cfg.moveRate, -vmax / C.line, vmax / C.line);
+          m.py += vy * dt;
+          m.px += vz * dt;
+          m.vl = vy * halfW() * leftSign(s);   // m/s toward the player's left (returnShot)
         }
       }
     },
@@ -1193,10 +1318,12 @@ function createRacketGame(hub, cfg) {
       teams: sides.map((sd) => sd.members.map((m) => (m.cpu ? 'AI:' : '') + m.name)),
       scores: [sides[0].score, sides[1].score], games: [sides[0].games, sides[1].games], rally,
       views: renderer ? views().length : 0,
-      ball: ball && { t: ball.t, T: ball.T, hitter: ball.hitter, out: ball.out, receiver: ball.receiver && ball.receiver.name },
+      ball: ball && { t: ball.t, T: ball.T, u: ball.contact.t - ball.t, hitter: ball.hitter, out: ball.out, net: ball.net, kind: ball.kind, land: ball.land, contact: ball.contact, receiver: ball.receiver && ball.receiver.name },
+      players: sides.flatMap((sd) => sd.members.map((m) => ({ name: m.name, py: +m.py.toFixed(2), px: +m.px.toFixed(2) }))),
       server: phase === 'serve' ? serverInfo().m.name : null,
       call: TENNIS ? tennisCall() : null,
       looks: [...memberObjs.values()].map((o) => (o.ch ? `${o.ch.id}:${o.ch.overlay ? o.ch.overlay.name : 'moving'}` : 'chibi')),
+      objs: [...memberObjs.values()].map((o) => o.root.position.toArray().map((v) => +v.toFixed(2)).concat([+o.root.rotation.y.toFixed(2), o.root.visible, o.root.parent ? 1 : 0])),
     }),
   };
 }

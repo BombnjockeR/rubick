@@ -427,6 +427,33 @@ def lift_limb(o, moving, prefer=None):
     return len(nf), len(body)
 
 
+def tidy_mesh(o, min_piece=8):
+    """Generic repairs of an AI-generated mesh before rigging: loose scraps of fewer
+    than `min_piece` vertices (stray cones, specks), faces of no area, and face
+    normals made consistent. Returns (pieces removed, faces removed, normals flipped)."""
+    me = o.data
+    P, E = mesh_arrays(o)
+    comp = components(len(P), E)
+    sizes = np.bincount(comp)
+    scrap = sizes[comp] < min_piece
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bm.verts.ensure_lookup_table()
+    n_pieces = len(np.unique(comp[scrap]))
+    gone_faces = [f for f in bm.faces if f.calc_area() < 1e-9]
+    n_faces = len(gone_faces)
+    bmesh.ops.delete(bm, geom=gone_faces, context='FACES')
+    bmesh.ops.delete(bm, geom=[bm.verts[i] for i in np.nonzero(scrap)[0]], context='VERTS')
+    bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context='VERTS')
+    before = [f.normal.copy() for f in bm.faces]
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.normal_update()
+    n_flip = sum(1 for f, n in zip(bm.faces, before) if f.normal.dot(n) < 0)
+    bm.to_mesh(me)
+    bm.free()
+    return n_pieces, n_faces, n_flip
+
+
 def limb_faces(o, joints, radius):
     """Faces of a limb: within `radius` of the joint polyline and facing away from
     it (the torso surface the limb rests against faces the other way)."""
@@ -447,11 +474,12 @@ def repose(o, k, pivot, rot):
             v.co = pivot + Quaternion().slerp(rot, float(k[v.index])) @ (v.co - pivot)
 
 
-def apply_pose_as_rest(meshes, rig_obj, pose):
+def apply_pose_as_rest(meshes, rig_obj, pose, normals=None):
     """Re-pose a rigged model for good: pose the bones (pose(Anim)), bake the
     deformed meshes and make that pose the armature's rest pose. Used to move a
-    modelled limb (a hand resting on the hip) somewhere that animates better."""
-    an = Anim(rig_obj)
+    modelled limb (a hand resting on the hip) somewhere that animates better, and
+    to drop a T-pose's arms. `normals` are passed to the Anim (see Anim.aim)."""
+    an = Anim(rig_obj, normals=normals)
     an.rest()
     pose(an)
     bpy.context.view_layer.update()
@@ -859,6 +887,37 @@ class Skin:
             self.W[idx] = self.W[good[gi]]
         return int(bad.sum())
 
+    def attach_small(self, max_size=150, keep=('head', 'ear', 'tail')):
+        """Small separate pieces (a tool on a belt, laces, eye highlights) move with
+        the bigger piece they sit on: they take the weights of the nearest vertex of
+        a piece larger than `max_size`. Heat diffusion sees them from odd bones (the
+        lioness's belt tool followed an arm). Pieces that heat gave mostly to a
+        `keep` bone (an ear, a pom-pom tail) are left as they are."""
+        ids, counts = np.unique(self.comp, return_counts=True)
+        big = np.isin(self.comp, ids[counts > max_size]) & (self.W.sum(1) > 1e-3)
+        if not big.any():
+            return 0
+        gi = np.nonzero(big)[0]
+        kd = kdtree.KDTree(len(gi))
+        for i, v in enumerate(gi):
+            kd.insert(self.P[v], i)
+        kd.balance()
+        moved = 0
+        for c, n in zip(ids, counts):
+            if n > max_size:
+                continue
+            idx = np.nonzero((self.comp == c) & ~self.locked)[0]
+            if not len(idx):
+                continue
+            tot = self.W[idx].sum(0)
+            dom = self.names[int(tot.argmax())]
+            if tot.sum() > 0 and tot.max() / tot.sum() >= 0.6 and dom.startswith(keep):
+                continue
+            _, j, _ = kd.find(self.P[idx].mean(0))
+            self.W[idx] = self.W[gi[j]]
+            moved += len(idx)
+        return moved
+
     def unify_components(self, max_size=200):
         """Small separate pieces (laces, highlights, buttons) get one averaged
         weight set so they can't tear apart from themselves."""
@@ -969,50 +1028,50 @@ def split_off(o, vert_mask, name):
     return new
 
 
-def build_paddle(arm, grip, prop_pts, name='prop_paddle', radius=0.06, bone='handR'):
-    """A table-tennis paddle in the same hand as a modelled racket: handle in the
-    fist (`grip`), blade along the racket's shaft, facing the way its strings did.
-    Skinned rigidly to `bone` so it follows every clip."""
-    grip = np.asarray(grip, float)
-    d = np.linalg.norm(prop_pts - grip, axis=1)
-    head = prop_pts[d > np.percentile(d, 55)]
-    hc = head.mean(0)
-    x = (hc - grip) / np.linalg.norm(hc - grip)                 # along the shaft
-    w, V = np.linalg.eigh(np.cov((head - hc).T))
-    z = V[:, 0] - (V[:, 0] @ x) * x                             # face normal, orthogonal to the shaft
-    z /= np.linalg.norm(z)
-    y = np.cross(z, x)
-    F = Matrix(((x[0], y[0], z[0]), (x[1], y[1], z[1]), (x[2], y[2], z[2])))   # paddle frame -> armature
+class ToolFrame:
+    """Where a hand-held tool sits: `grip` (the fist, armature space) and the axes
+    x = along the shaft toward the head, z = the face normal, y = z x x."""
 
-    def place(local_rot, offset):
-        m = F.to_4x4() @ Matrix.Translation(Vector(offset)) @ local_rot
-        m.translation = Vector(grip) + F @ Vector(offset)
+    def __init__(self, grip, x, z):
+        x = np.asarray(x, float) / np.linalg.norm(x)
+        z = np.asarray(z, float)
+        z = z - (z @ x) * x
+        z /= np.linalg.norm(z)
+        y = np.cross(z, x)
+        self.grip = np.asarray(grip, float)
+        self.x, self.y, self.z = x, y, z
+        self.M = Matrix(((x[0], y[0], z[0]), (x[1], y[1], z[1]), (x[2], y[2], z[2])))   # tool frame -> armature
+
+    @classmethod
+    def from_points(cls, grip, prop_pts):
+        """Frame of a modelled racket: shaft from the fist to the head's centre, face
+        normal from the head's flattest direction."""
+        grip = np.asarray(grip, float)
+        d = np.linalg.norm(prop_pts - grip, axis=1)
+        head = prop_pts[d > np.percentile(d, 55)]
+        hc = head.mean(0)
+        w, V = np.linalg.eigh(np.cov((head - hc).T))
+        return cls(grip, hc - grip, V[:, 0])
+
+    @classmethod
+    def from_socket(cls, arm, normal=(0, 0, 1), bone='sockHandR'):
+        """Frame along the hand socket bone (fist -> grip joint), face normal given in
+        armature space (its part square to the shaft)."""
+        b = arm.data.bones[bone]
+        return cls(b.head_local, b.tail_local - b.head_local, normal)
+
+    def local_normal(self, arm, bone='sockHandR'):
+        """The face normal in the socket bone's rest frame (what Anim.tool_normal wants)."""
+        return arm.data.bones[bone].matrix_local.to_3x3().inverted() @ Vector(self.z)
+
+    def place(self, local_rot, offset):
+        m = self.M.to_4x4() @ Matrix.Translation(Vector(offset)) @ local_rot
+        m.translation = Vector(self.grip) + self.M @ Vector(offset)
         return m
-    bm = bmesh.new()
-    mats = [mat_color('paddle_wood', '#b07a4a'), mat_color('paddle_red', '#e63946'), mat_color('paddle_black', '#1d1d24')]
 
-    def add(geom_fn, mi, M):
-        g = bmesh.new()
-        geom_fn(g)
-        bmesh.ops.transform(g, matrix=M, verts=g.verts)
-        for f in g.faces:
-            f.material_index = mi
-            f.smooth = True
-        tmp = bpy.data.meshes.new('_tmp')
-        g.to_mesh(tmp)
-        g.free()
-        bm.from_mesh(tmp)
-        bpy.data.meshes.remove(tmp)
-    along = Matrix.Rotation(math.pi / 2, 4, 'Y')               # cylinder axis (Z) -> shaft (X)
-    hl = 0.07
-    add(lambda g: bmesh.ops.create_cone(g, cap_ends=True, segments=12, radius1=0.012, radius2=0.013, depth=hl),
-        0, place(along, (hl / 2 - 0.025, 0, 0)))
-    centre = hl - 0.025 + radius * 0.92
-    for mi, dz in ((1, 0.0045), (2, -0.0045)):
-        add(lambda g: bmesh.ops.create_cone(g, cap_ends=True, segments=32, radius1=radius, radius2=radius, depth=0.006),
-            mi, place(Matrix(), (centre, 0, dz)))
-    add(lambda g: bmesh.ops.create_cone(g, cap_ends=True, segments=32, radius1=radius * 1.02, radius2=radius * 1.02,
-                                        depth=0.004), 0, place(Matrix(), (centre, 0, 0)))
+
+def _prop_object(arm, bm, mats, name, bone):
+    """A mesh object parented to the armature and skinned rigidly to `bone`."""
     me = bpy.data.meshes.new(name)
     bm.to_mesh(me)
     bm.free()
@@ -1026,6 +1085,79 @@ def build_paddle(arm, grip, prop_pts, name='prop_paddle', radius=0.06, bone='han
     mod = ob.modifiers.new('Armature', 'ARMATURE')
     mod.object = arm
     return ob
+
+
+def _add_prim(bm, geom_fn, mi, M, smooth=True):
+    g = bmesh.new()
+    geom_fn(g)
+    bmesh.ops.transform(g, matrix=M, verts=g.verts)
+    for f in g.faces:
+        f.material_index = mi
+        f.smooth = smooth
+    tmp = bpy.data.meshes.new('_tmp')
+    g.to_mesh(tmp)
+    g.free()
+    bm.from_mesh(tmp)
+    bpy.data.meshes.remove(tmp)
+
+
+def build_paddle(arm, frame, name='prop_paddle', radius=0.06, bone='handR'):
+    """A table-tennis paddle in the hand: handle in the fist, blade along the frame's
+    shaft, rubber facing its normal. Skinned rigidly to `bone` so it follows every clip."""
+    bm = bmesh.new()
+    mats = [mat_color('paddle_wood', '#b07a4a'), mat_color('paddle_red', '#e63946'), mat_color('paddle_black', '#1d1d24')]
+    along = Matrix.Rotation(math.pi / 2, 4, 'Y')               # cylinder axis (Z) -> shaft (X)
+    hl = 0.07
+    _add_prim(bm, lambda g: bmesh.ops.create_cone(g, cap_ends=True, segments=12, radius1=0.012, radius2=0.013, depth=hl),
+              0, frame.place(along, (hl / 2 - 0.025, 0, 0)))
+    centre = hl - 0.025 + radius * 0.92
+    for mi, dz in ((1, 0.0045), (2, -0.0045)):
+        _add_prim(bm, lambda g: bmesh.ops.create_cone(g, cap_ends=True, segments=32, radius1=radius, radius2=radius, depth=0.006),
+                  mi, frame.place(Matrix(), (centre, 0, dz)))
+    _add_prim(bm, lambda g: bmesh.ops.create_cone(g, cap_ends=True, segments=32, radius1=radius * 1.02, radius2=radius * 1.02,
+                                                  depth=0.004), 0, frame.place(Matrix(), (centre, 0, 0)))
+    return _prop_object(arm, bm, mats, name, bone)
+
+
+def build_racket(arm, frame, name='prop_racket', length=0.36, head=(0.095, 0.085), color='#ff4757', bone='handR'):
+    """A toy tennis racket for a character modelled without one: grip in the fist,
+    shaft along the frame's x, strings facing its z. `length` is fist to tip, `head`
+    the head's half-axes (along, across), in model units (the character is 1 tall)."""
+    bm = bmesh.new()
+    mats = [mat_color('racket_grip', '#2d3340', rough=0.8), mat_color('racket_frame', color, rough=0.45),
+            mat_color('racket_strings', '#f6f2e6', rough=0.7)]
+    along = Matrix.Rotation(math.pi / 2, 4, 'Y')               # cylinder axis (Z) -> shaft (X)
+    a, b = head
+    hc = length - a                                           # head centre along the shaft
+    handle = hc - a - 0.02
+    _add_prim(bm, lambda g: bmesh.ops.create_cone(g, cap_ends=True, segments=10, radius1=0.013, radius2=0.011, depth=handle + 0.035),
+              0, frame.place(along, ((handle + 0.035) / 2 - 0.035, 0, 0)))
+    _add_prim(bm, lambda g: bmesh.ops.create_cone(g, cap_ends=True, segments=10, radius1=0.009, radius2=0.009, depth=0.05),
+              1, frame.place(along, (handle + 0.02, 0, 0)))
+    # throat: two struts from the shaft to the head's lower half
+    for sy in (-1, 1):
+        rot = Matrix.Rotation(math.pi / 2, 4, 'Y') @ Matrix.Rotation(sy * 0.55, 4, 'Z')
+        _add_prim(bm, lambda g: bmesh.ops.create_cone(g, cap_ends=True, segments=8, radius1=0.008, radius2=0.008, depth=0.075),
+                  1, frame.place(rot, (handle + 0.065, sy * 0.028, 0)))
+    # frame: a ring of boxes around an ellipse
+    seg = 28
+    for i in range(seg):
+        t0, t1 = TAU * i / seg, TAU * (i + 1) / seg
+        p0 = Vector((hc + a * math.cos(t0), b * math.sin(t0), 0))
+        p1 = Vector((hc + a * math.cos(t1), b * math.sin(t1), 0))
+        mid, d = (p0 + p1) / 2, (p1 - p0)
+        rot = Vector((0, 0, 1)).rotation_difference(d.normalized()).to_matrix().to_4x4()
+        L = d.length * 1.08
+        _add_prim(bm, lambda g, L=L: bmesh.ops.create_cone(g, cap_ends=True, segments=8, radius1=0.0085, radius2=0.0085, depth=L),
+                  1, frame.place(rot, tuple(mid)))
+    # strings: a flat ellipse, slightly inside the frame
+    def ellipse(g):
+        verts = [g.verts.new((hc + a * 0.93 * math.cos(TAU * i / seg), b * 0.93 * math.sin(TAU * i / seg), 0)) for i in range(seg)]
+        g.faces.new(verts)
+        bmesh.ops.triangulate(g, faces=g.faces[:])
+    for dz in (0.0015, -0.0015):
+        _add_prim(bm, ellipse, 2, frame.place(Matrix(), (0, 0, dz)), smooth=False)
+    return _prop_object(arm, bm, mats, name, bone)
 
 
 def mat_color(name, hex_color, rough=0.55):
@@ -1052,12 +1184,19 @@ class Anim:
             a.key(f)
     """
 
-    def __init__(self, rig, soles=None):
+    def __init__(self, rig, soles=None, tool_normal=None, normals=None):
         self.rig = rig
         self.rest_rot = {b.name: b.matrix_local.to_3x3() for b in rig.data.bones}
         self.actions = []
         # {foot bone: [rest points on the sole]}: ground() keeps the lowest one on z = 0
         self.soles = {k: [Vector(p) for p in v] for k, v in (soles or {}).items()}
+        # {bone: direction in that bone's rest frame} that aim(normal=...) lines up: the
+        # racket face's normal for sockHandR (ToolFrame.local_normal), the back of the
+        # hand for either hand socket. Clips can then say which way the face points,
+        # whatever the character's rest grip.
+        self.normals = {k: Vector(v) for k, v in (normals or {}).items()}
+        if tool_normal is not None:
+            self.normals['sockHandR'] = Vector(tool_normal)
 
     def ground(self, lift=0.0):
         """Move the hips so the lowest sole point touches the floor (+ lift)."""
@@ -1105,10 +1244,13 @@ class Anim:
                 q = Quaternion(R @ AXES[ax], math.radians(deg)) @ q
         pb.rotation_quaternion = q
 
-    def aim(self, bone, direction, ref=None, twist=0.0):
+    def aim(self, bone, direction, ref=None, twist=0.0, normal=None):
         """Turn `bone` (with its parents as currently posed) so that it, or its
         child `ref` (e.g. a prop socket), points along an armature-space
-        direction; then twist about that direction by `twist` degrees."""
+        direction; then twist about that direction by `twist` degrees, or so that
+        the tool's face normal (tool_normal, in ref's frame) points along `normal`
+        (projected square to the direction): the same pose then holds the racket
+        the same way on every character."""
         bpy.context.view_layer.update()
         pb = self.rig.pose.bones[bone]
         rb = self.rig.pose.bones[ref or bone]
@@ -1117,8 +1259,27 @@ class Anim:
         q = cur.rotation_difference(d)
         if twist:
             q = Quaternion(d, math.radians(twist)) @ q
+        local = self.normals.get(ref or bone)
+        if normal is not None and local is not None:
+            n_cur = q @ (rb.matrix.to_3x3() @ local)
+            n_cur = (n_cur - n_cur.dot(d) * d)
+            n_want = Vector(normal)
+            n_want = n_want - n_want.dot(d) * d
+            if n_cur.length > 1e-6 and n_want.length > 1e-6:
+                n_cur.normalize()
+                n_want.normalize()
+                ang = math.atan2(n_cur.cross(n_want).dot(d), n_cur.dot(n_want))
+                q = Quaternion(d, ang) @ q
         M = pb.matrix.to_3x3()
         pb.rotation_quaternion = pb.rotation_quaternion @ (M.inverted() @ q.to_matrix() @ M).to_quaternion()
+
+    def tool_axes(self, ref='sockHandR'):
+        """Posed (shaft direction, face normal) of the tool in armature space."""
+        bpy.context.view_layer.update()
+        rb = self.rig.pose.bones[ref]
+        d = (rb.tail - rb.head).normalized()
+        local = self.normals.get(ref)
+        return d, (rb.matrix.to_3x3() @ local if local is not None else None)
 
     def reach(self, upper, lower, target, pole):
         """Two-bone IK: aim `upper` and `lower` (e.g. arm, forearm) so the lower

@@ -387,7 +387,18 @@
   // ---------- Motion (swing detection) ----------
   // A swing is a burst of rotation (gyroscope) or linear acceleration.
   // When either crosses a threshold we watch ~70ms for the peak, then send
-  // {t:'swing', power 0..1} to the screen. Timing is judged on the screen.
+  // {t:'swing', power 0..1, dx, dy} to the screen. Timing is judged on the screen.
+  //
+  // Direction: gravity (accelerationIncludingGravity, low-passed while the phone is
+  // still) says which way is up in the phone's own axes, whatever the grip. During
+  // the peak window, rotation about that vertical tells left from right (a forehand
+  // sweeps counter-clockwise seen from above: dx < 0 = the ball goes left) and the
+  // acceleration along it tells up from down (dy > 0 = lifted, a lob; < 0 = driven
+  // down, a smash). Tilting the phone forward or back from how it was held moves the
+  // player closer to the net or deeper (sent as the stick's y).
+  // Browsers disagree on the sign of the acceleration values (older iOS reports them
+  // the other way round); holding the phone upright like a paddle settles it: the
+  // screen's top is up, so gravity's reported y says which convention this is.
   const Motion = (() => {
     const GYRO_TH = 260;     // deg/s that counts as a swing
     const ACC_TH = 14;       // m/s² of linear acceleration that counts as a swing
@@ -395,13 +406,22 @@
     const ACC_FULL = 32;     // m/s² for a full-power swing
     const PEAK_WINDOW = 70;  // ms to look for the peak after the swing starts
     const COOLDOWN = 380;    // ms before another swing can register
+    const YAW_FULL = 40;     // degrees turned about the vertical in the window = fully sideways
+    const UP_FULL = 1.0;     // m/s gained along the vertical in the window = fully up / down
+    const TILT_DEAD = 8;     // degrees of tilt that mean nothing
+    const TILT_FULL = 30;    // degrees of tilt = all the way forward / back
 
     const meter = $('#mMeter');
     const paddle = $('#mPaddle');
     const status = $('#mStatus');
+    const last = $('#mLast');
     const btn = $('#motionBtn');
     let listening = false, gotData = false;
     let swinging = false, swingStart = 0, peak = 0, coolUntil = 0, level = 0;
+    let gravity = null;      // low-passed reading of gravity in phone axes
+    let inverted = false;    // this browser reports acceleration the other way round
+    let sum = { up: 0, yaw: 0 };
+    let tiltBase = null, tiltY = 0, lastT = 0;
 
     const needsPermission = () =>
       typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function';
@@ -449,37 +469,86 @@
       else if (g && g.x != null) acc = Math.abs(Math.hypot(g.x, g.y || 0, g.z || 0) - 9.81);
       if (r && r.alpha != null) gotData = true;
       if (a && a.x != null) gotData = true;
-      feed(gyro, acc);
+      const vec = (a && a.x != null && g && g.x != null && r && r.alpha != null)
+        ? { a: [a.x, a.y || 0, a.z || 0], g: [g.x, g.y || 0, g.z || 0], r: [r.alpha, r.beta || 0, r.gamma || 0] } : null;
+      feed(gyro, acc, vec);
     }
 
-    function feed(gyro, acc) {
+    const dot = (u, v) => u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+
+    // Which way is up in phone axes, from the still phone's gravity reading.
+    function trackGravity(vec, quiet, dt) {
+      if (!vec) return null;
+      if (quiet || !gravity) {
+        const k = gravity ? 1 - Math.exp(-dt / 0.5) : 1;
+        gravity = gravity ? gravity.map((v, i) => v + (vec.g[i] - v) * k) : vec.g.slice();
+        // Held upright, the screen's top points up: by the spec gravity then reads +9.8
+        // along y; a browser that reports -9.8 has the signs the other way round.
+        if (Math.abs(gravity[1]) > 5) inverted = gravity[1] < 0;
+        else if (Math.abs(gravity[2]) > 5) inverted = gravity[2] < 0;   // lying flat, screen up
+      }
+      const n = Math.hypot(...gravity) || 1;
+      const sgn = inverted ? -1 : 1;
+      return gravity.map((v) => (v / n) * sgn);
+    }
+
+    // Forward / back tilt against how the phone has been held (a slow baseline).
+    function trackTilt(up, quiet, dt) {
+      const pitch = Math.atan2(up[2], up[1]) * 180 / Math.PI;   // top of the phone tipped away = +
+      if (tiltBase == null) tiltBase = pitch;
+      else if (quiet) tiltBase += (pitch - tiltBase) * (1 - Math.exp(-dt / 20));
+      const d = pitch - tiltBase;
+      const y = Math.abs(d) < TILT_DEAD ? 0 : -Math.max(-1, Math.min(1, (d - Math.sign(d) * TILT_DEAD) / (TILT_FULL - TILT_DEAD)));
+      tiltY += (y - tiltY) * (1 - Math.exp(-dt / 0.25));
+      const ry = Math.round(tiltY * 10) / 10;
+      if (ry !== state.y) { state.y = ry; state.x = 0; flush(); }
+    }
+
+    function feed(gyro, acc, vec = null) {
       const now = performance.now();
+      const dt = lastT ? Math.min(0.1, (now - lastT) / 1000) : 0.016;
+      lastT = now;
       const strength = Math.max(gyro / GYRO_FULL, acc / ACC_FULL);
       level = Math.max(level, strength);
+      const quiet = gyro < GYRO_TH * 0.4 && acc < ACC_TH * 0.4;
+      const up = trackGravity(vec, quiet, dt);
       if (mode !== 'motion' || !connected) return;
+      if (up && !swinging) trackTilt(up, quiet, dt);
       if (!swinging && now >= coolUntil && (gyro > GYRO_TH || acc > ACC_TH)) {
         swinging = true;
         swingStart = now;
         peak = strength;
+        sum = { up: 0, yaw: 0 };
       }
       if (swinging) {
         peak = Math.max(peak, strength);
+        if (up && vec) {
+          sum.up += dot(vec.a, up) * (inverted ? -1 : 1) * dt;   // m/s gained upward
+          sum.yaw += dot(vec.r, up) * dt;                        // degrees turned, counter-clockwise from above
+        }
         if (now - swingStart >= PEAK_WINDOW) {
           swinging = false;
           coolUntil = now + COOLDOWN;
-          fire(Math.min(1, Math.max(0.15, (peak - 0.2) / 0.8)));
+          const dx = -Math.max(-1, Math.min(1, sum.yaw / YAW_FULL));
+          const dy = Math.max(-1, Math.min(1, sum.up / UP_FULL));
+          fire(Math.min(1, Math.max(0.15, (peak - 0.2) / 0.8)), dx, dy);
         }
       }
     }
 
-    function fire(power) {
+    function fire(power, dx = 0, dy = 0) {
       if (!connected) return;
-      sendRaw({ t: 'swing', power: Math.round(power * 100) / 100 });
+      sendRaw({ t: 'swing', power: Math.round(power * 100) / 100, dx: Math.round(dx * 100) / 100, dy: Math.round(dy * 100) / 100 });
       haptic(12);
       paddle.classList.remove('swing');
       void paddle.offsetWidth; // restart the animation
       paddle.classList.add('swing');
       setTimeout(() => paddle.classList.remove('swing'), 220);
+      if (last) {
+        const side = dx < -0.25 ? 'left' : dx > 0.25 ? 'right' : 'straight';
+        const lift = dy > 0.3 ? ', lifted' : dy < -0.3 ? ', driven down' : '';
+        last.textContent = `Last swing: ${Math.round(power * 100)}% power, ${side}${lift}`;
+      }
     }
 
     let shown = '';
@@ -490,15 +559,18 @@
       requestAnimationFrame(animate);
     })();
 
+    // No sensors: tap the left, middle or right of the area to aim the swing.
     $('#tapSwing').addEventListener('pointerdown', (e) => {
       e.preventDefault();
+      const r = e.currentTarget.getBoundingClientRect();
+      const k = (e.clientX - r.left) / Math.max(1, r.width);
       level = 0.6;
-      fire(0.6);
+      fire(0.6, k < 0.33 ? -0.8 : k > 0.67 ? 0.8 : 0, 0);
     });
 
-    return { prepare, feed };
+    return { prepare, feed, state: () => ({ gravity, inverted, tiltBase, tiltY }) };
   })();
-  window.__motion = Motion; // lets tests inject fake sensor readings
+  window.__motion = Motion; // lets tests inject fake sensor readings: feed(gyro, acc, { a, g, r })
 
   if (codeInput.value) nameInput.focus();
 })();

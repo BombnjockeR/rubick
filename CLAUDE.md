@@ -16,18 +16,20 @@ Read first, depending on the task:
 npm install                         # dev tools only (http-server, gltf-transform)
 npm run dev                         # http://localhost:8080  (landing) and /play.html (host)
 npm run cert && npm run dev:https   # https://<lan-ip>:8443 — needed for phone motion sensors
-npm run assets:animals              # rebuild bunny.glb, dog.glb, island_court.glb (Blender app + art/source/)
+npm run assets:animals              # rebuild the six animals and island_court.glb (Blender app + art/source/)
+npm run assets:island               # rebuild island_court.glb, the tennis island (same requirements)
+npm run assets:kitchens             # rebuild kitchen.glb (station and food templates) and the three kitchen_*.glb dioramas
 npm run assets:landing              # rebuild landing_island.glb, the landing page's island (same requirements)
 npm run assets                      # rebuild every assets/*.glb (BLENDER=/path or BPY=python3.13 to choose Blender)
 npm run smoke                       # with `npm run dev` running: headless-Chrome smoke test (--full plays whole matches)
 ```
 
-There is no unit test suite, linter or build step for the code. `node --check <file>` catches syntax errors; `npm run smoke` covers the characters (clips, poses, foot sliding), the racket games' waiting room, both racket games, asset fallbacks and every page.
+There is no unit test suite, linter or build step for the code. `node --check <file>` catches syntax errors; `npm run smoke` covers the characters (clips, poses, foot sliding), the racket games' waiting room, both racket games, the three kitchens (one recipe through every station, burning, expiring orders), asset fallbacks and every page (`--only cooking` runs one section).
 
 ## Code conventions
 
 - Classic `<script>` tags, no modules. Each file is an IIFE or registers onto a global: `MABAR`, `MabarGames` (js/common.js), `Kit3D` (js/kit3d.js), `MabarChars` (js/character.js, after kit3d), `MabarRacket` (js/games/racket.js), `THREE` (vendor bundle). **Script order in the HTML matters.**
-- A game is one file in `js/games/` calling `MabarGames.register({...})`, plus a `<script>` tag in `play.html` before `js/screen.js`. Racket sports are configs passed to `MabarRacket.define`.
+- A game is one file in `js/games/` calling `MabarGames.register({...})`, plus a `<script>` tag in `play.html` before `js/screen.js`. Racket sports are configs passed to `MabarRacket.define`. Cooking's kitchens are data in `js/games/kitchens.js` (`MabarKitchens`, strict JSON inside: `art/kitchens.py` parses it), loaded before `cooking.js`.
 - 2-space indent, single quotes, semicolons, `'use strict'` inside IIFEs. Python (art/) uses 4 spaces.
 - Comments explain *why* or describe the gameplay rule; keep that density, not more.
 - World units are meters, three.js Y-up (Blender Z-up, converted on glTF export).
@@ -44,8 +46,9 @@ There is no unit test suite, linter or build step for the code. `node --check <f
 
 - `assets/` is **game-ready runtime files only** (meshopt `.glb`, `img/*.jpg`). Everything in it ships to Pages.
 - `assets/*.glb` are generated: edit `art/*.py` and rebuild, never hand-edit the `.glb`. Node, bone, material and clip names (`ch_tennis_armR`, `shirt`, `plat_tennis`, `k_stove`, the animals' bones/`sock*`/`prop_*`/clips …) are an API the JS looks up by name; renaming one breaks the game silently. The full contract is in docs/ASSET_PIPELINE.md.
-- The animals (`bunny.glb`, `dog.glb`) and `island_court.glb` are built from `art/source/` by `art/animals.py` / `art/island.py`; character landmarks and skinning rules live in `art/animals.py`, clips in `art/clips.py`. Check rig changes with `art/preview_clips.py` and `tools/characters.html`.
-- The landing page's island (`landing_island.glb`) is built from `art/source/environments/landingpage/` by `art/landing_island.py`; its node names (`hot_*` anchors, `land`, `rocks`, `tree_*`, `bunt_*`, `cloud_*` …) are looked up by `js/landing.js`. Pieces are picked by rule (shape, colour, what they stand on), not by id.
+- The animals (`bunny.glb`, `dog.glb`, `cat.glb`, `panda.glb`, `chimp.glb`, `lioness.glb`), `island_court.glb` and the three `kitchen_*.glb` are built from `art/source/` by `art/animals.py` / `art/island.py` / `art/kitchens.py`; the bunny and pup have hand-measured joints in `art/animals.py`, the T-posed four get theirs from `art/landmarks.py` (plus per-character overrides), skinning rules are in `art/rig.py`, clips in `art/clips.py`. Check rig changes with `art/preview_clips.py` and `tools/characters.html`. `./art/build.sh animals` rebuilds just the characters (~30 s).
+- The landing page's island (`landing_island.glb`) is built from `art/source/environments/landingpage/` by `art/landing_island.py`; its node names (`hot_*` anchors, `land`, `rocks`, `tree_*`, `bunt_*`, `cloud_*` …) are looked up by `js/landing.js`. Pieces are picked by rule (shape, colour, what they stand on), not by id. The tennis island (`art/island.py`) and the kitchens (`art/kitchens.py`) work the same way, and their environment nodes (`tree_*`, `flag_*`, `bunt_*`, `crowd_*`, `umbrella_*`, `cloud_*`, `boat_*`, `steam_*`, materials `sea` / `shallows` / `water`) are animated at runtime by `Kit3D.liven` (js/kit3d.js).
+- The optimized `.glb` files are quantized: meshes carry a scale and offset in their node. Never overwrite a template child's `position` or `scale` from JS; add to the values the node already has (see `part()` in `js/games/cooking.js`).
 - `art/source/` (original FBX + textures) and `art/reference/` (concept art) are **gitignored, local-only**. Never move them into `assets/`, never delete or overwrite originals; write converted output elsewhere.
 - `vendor/` is third-party (PeerJS, qrcode-generator, a custom Three.js bundle). Don't edit it; replace whole files and update versions in README.
 

@@ -45,13 +45,15 @@ class Traits:
     """What differs between animals: ear style, a hand kept in a pocket, tail."""
 
     def __init__(self, ears='up', pocket=False, tail=1.0):
-        self.ears = ears        # 'up' (rabbit) or 'floppy' (dog)
+        self.ears = ears        # 'up' (rabbit), 'floppy' (dog) or 'none' (hidden under a hood)
         self.pocket = pocket    # left hand stays in the shorts pocket
-        self.tail = tail        # wag strength
+        self.tail = tail        # wag strength (0: no tail; the stub bones stay still)
 
 
 def ears(an, t, back=0.0, out=0.0, tip=0.0):
     """back: ears trail backward; out: spread outward; tip: outer half bends further."""
+    if t.ears == 'none':
+        return
     if t.ears == 'up':
         an.rot('earL1', pitch=-back, side=out)
         an.rot('earR1', pitch=-back, side=-out)
@@ -65,6 +67,8 @@ def ears(an, t, back=0.0, out=0.0, tip=0.0):
 
 
 def tail(an, t, wag=0.0, up=0.0):
+    if not t.tail:
+        return
     an.rot('tail1', yaw=wag * t.tail, pitch=up)
     an.rot('tail2', yaw=wag * 0.8 * t.tail, pitch=up * 0.5)
 
@@ -221,7 +225,7 @@ def jump(an, t, n=30):
         legs_bent(an, -6, 4, toes=28)
         an.rot('spine', pitch=-6)
         an.rot('head', pitch=-8)
-        racket_up(an, arm=(-0.62, -0.3, 0.72), fore=(-0.35, -0.6, 0.72), racket=(-0.15, -0.25, 0.95))
+        racket_up(an, arm=(-0.62, -0.3, 0.72), fore=(-0.35, -0.6, 0.72), racket=(-0.15, -0.25, 0.95), normal=(-0.30, 0.94, 0.14))
         if not t.pocket:
             an.aim('armL', (0.62, -0.25, 0.74))
             an.aim('forearmL', (0.35, -0.55, 0.75))
@@ -232,7 +236,7 @@ def jump(an, t, n=30):
         legs_bent(an, 52, 88)
         an.rot('spine', pitch=4)
         an.rot('head', pitch=-12)
-        racket_up(an, arm=(-0.45, -0.2, 0.87), fore=(-0.2, -0.3, 0.93), racket=(-0.05, 0.0, 1.0))
+        racket_up(an, arm=(-0.45, -0.2, 0.87), fore=(-0.2, -0.3, 0.93), racket=(-0.05, 0.0, 1.0), normal=(0.01, 1.0, -0.06))
         if not t.pocket:
             an.aim('armL', (0.45, -0.15, 0.88))
             an.aim('forearmL', (0.2, -0.3, 0.93))
@@ -290,11 +294,14 @@ def legs_bent(an, thigh, knee, toes=0.0):
         an.rot('foot' + leg, pitch=thigh - knee + toes)
 
 
-def racket_up(an, arm, fore, racket, twist=0.0):
-    """Right arm aimed along absolute directions, racket pointing along `racket`."""
+def racket_up(an, arm, fore, racket, twist=0.0, normal=None):
+    """Right arm aimed along absolute directions, racket pointing along `racket` with
+    the strings facing `normal` (its part square to the shaft), so every character
+    holds it the same way whatever its modelled grip. The normals below were read
+    off the bunny's clips (the back of its fist), which they leave unchanged."""
     an.aim('armR', arm)
     an.aim('forearmR', fore)
-    an.aim('handR', racket, ref='sockHandR', twist=twist)
+    an.aim('handR', racket, ref='sockHandR', twist=twist, normal=normal)
 
 
 def two_hands(an, along=0.065):
@@ -318,7 +325,7 @@ def stance(an, t, bounce=0.0, width=9.0, bend=24.0, legs=True):
     an.rot('spine', pitch=6)
     an.rot('chest', pitch=4)
     an.rot('head', pitch=-15)
-    racket_up(an, arm=(-0.3, -0.45, -0.84), fore=(0.25, -0.95, 0.12), racket=(0.2, -0.85, 0.48))
+    racket_up(an, arm=(-0.3, -0.45, -0.84), fore=(0.25, -0.95, 0.12), racket=(0.2, -0.85, 0.48), normal=(-0.97, -0.22, -0.12))
     two_hands(an)
 
 
@@ -387,7 +394,7 @@ def defeat(an, t, n=60):
         an.rot('chest', pitch=8 + 3 * sigh)
         an.rot('head', pitch=12 + 3 * sigh, yaw=7 * S(0.5 * p) * pulse(p, 0.5, 0.45))   # slow head shake
         # the racket hangs from a limp arm, its head dragging on the court
-        racket_up(an, arm=(-0.25, -0.12, -0.96), fore=(-0.1, -0.35, -0.93), racket=(-0.15, -0.55, -0.82))
+        racket_up(an, arm=(-0.25, -0.12, -0.96), fore=(-0.1, -0.35, -0.93), racket=(-0.15, -0.55, -0.82), normal=(-0.95, 0.29, 0.06))
         an.aim('armL', (0.22, -0.05, -0.97))
         an.aim('forearmL', (0.1, -0.25, -0.96))
         if t.ears == 'up':   # long ears fold back and out, deflated
@@ -409,7 +416,7 @@ def serve(an, t, n=21):
         an.rot('spine', pitch=-8, yaw=-12)
         an.rot('chest', pitch=-6, yaw=-22)
         an.rot('head', pitch=-30, yaw=16)
-        racket_up(an, arm=(-0.9, 0.25, 0.35), fore=(-0.2, 0.25, 0.95), racket=(-0.05, 0.55, 0.83))
+        racket_up(an, arm=(-0.9, 0.25, 0.35), fore=(-0.2, 0.25, 0.95), racket=(-0.05, 0.55, 0.83), normal=(0.17, 0.79, -0.59))
         an.aim('armL', (0.7, -0.25, 0.67))      # up and out, so the short arm clears the head
         an.aim('forearmL', (0.45, -0.2, 0.87))
 
@@ -418,7 +425,7 @@ def serve(an, t, n=21):
         an.rot('spine', pitch=-10, yaw=-6)
         an.rot('chest', pitch=-8, yaw=-10)
         an.rot('head', pitch=-32, yaw=8)
-        racket_up(an, arm=(-0.75, 0.15, 0.62), fore=(0.05, 0.55, 0.83), racket=(0.1, 0.45, -0.88))
+        racket_up(an, arm=(-0.75, 0.15, 0.62), fore=(0.05, 0.55, 0.83), racket=(0.1, 0.45, -0.88), normal=(-0.81, -0.51, -0.28))
         an.aim('armL', (0.55, -0.6, 0.35))
         an.aim('forearmL', (0.35, -0.85, 0.2))
 
@@ -427,7 +434,7 @@ def serve(an, t, n=21):
         an.rot('spine', pitch=-4, yaw=6)
         an.rot('chest', pitch=-2, yaw=10)
         an.rot('head', pitch=-28)
-        racket_up(an, arm=(-0.28, -0.32, 0.9), fore=(-0.15, -0.42, 0.9), racket=(-0.1, -0.55, 0.83))
+        racket_up(an, arm=(-0.28, -0.32, 0.9), fore=(-0.15, -0.42, 0.9), racket=(-0.1, -0.55, 0.83), normal=(-0.64, 0.70, 0.31))
         an.aim('armL', (0.45, -0.6, -0.65))
         an.aim('forearmL', (-0.2, -0.95, 0.2))
 
@@ -436,7 +443,7 @@ def serve(an, t, n=21):
         an.rot('spine', pitch=14, yaw=16)
         an.rot('chest', pitch=10, yaw=24)
         an.rot('head', pitch=-12, yaw=-10)
-        racket_up(an, arm=(0.35, -0.75, -0.55), fore=(0.65, -0.35, -0.67), racket=(0.45, 0.25, -0.86))
+        racket_up(an, arm=(0.35, -0.75, -0.55), fore=(0.65, -0.35, -0.67), racket=(0.45, 0.25, -0.86), normal=(-0.20, -0.93, -0.30))
         an.aim('armL', (0.6, 0.1, -0.8))
         an.aim('forearmL', (0.2, -0.9, -0.4))
 
@@ -471,7 +478,7 @@ def victory(an, t, n=48):
             an.rot('armL', pitch=3 * S(2 * p))
         pump = S(2 * p + 0.1)                                # racket pumps with the hops
         racket_up(an, arm=(-0.58, 0.02 - 0.08 * pump, 0.8), fore=(-0.42, -0.05 - 0.2 * pump, 0.9),
-                  racket=(-0.42, 0.2 - 0.25 * pump, 0.9))
+                  racket=(-0.42, 0.2 - 0.25 * pump, 0.9), normal=(0.25, 0.96, -0.1))
         if not t.pocket:
             an.aim('armL', (0.42, -0.08 - 0.1 * pump, 0.9))
             an.aim('forearmL', (0.15, -0.25 - 0.2 * pump, 0.95))
@@ -491,7 +498,7 @@ def swing(an, t, n=15):
         an.rot('spine', yaw=-18)
         an.rot('chest', yaw=-26, pitch=4)
         an.rot('head', yaw=34)
-        racket_up(an, arm=(-0.55, 0.6, -0.35), fore=(-0.4, 0.8, 0.1), racket=(-0.3, 0.5, 0.8))
+        racket_up(an, arm=(-0.55, 0.6, -0.35), fore=(-0.4, 0.8, 0.1), racket=(-0.3, 0.5, 0.8), normal=(0.96, 0.02, 0.27))
         if t.pocket:
             an.rot('armL', pitch=-6)
         else:   # the free hand points at the coming ball
@@ -503,7 +510,7 @@ def swing(an, t, n=15):
         an.rot('spine', yaw=2)
         an.rot('chest', yaw=4, pitch=6)
         an.rot('head', yaw=-4)
-        racket_up(an, arm=(-0.85, -0.25, -0.45), fore=(-0.6, -0.75, -0.2), racket=(-0.8, -0.5, 0.3))
+        racket_up(an, arm=(-0.85, -0.25, -0.45), fore=(-0.6, -0.75, -0.2), racket=(-0.8, -0.5, 0.3), normal=(-0.43, 0.89, 0.13))
         if t.pocket:
             an.rot('armL', pitch=0)
         else:
@@ -516,7 +523,7 @@ def swing(an, t, n=15):
         an.rot('chest', yaw=28, pitch=2)
         an.rot('head', yaw=-26)
         # finish beside the left shoulder, racket head back and out: clear of the big head
-        racket_up(an, arm=(0.45, -0.75, 0.1), fore=(0.85, 0.1, 0.05), racket=(0.6, 0.6, 0.3))
+        racket_up(an, arm=(0.45, -0.75, 0.1), fore=(0.85, 0.1, 0.05), racket=(0.6, 0.6, 0.3), normal=(0.01, -0.53, 0.85))
         if t.pocket:
             an.rot('armL', pitch=4)
         else:
@@ -528,7 +535,7 @@ def swing(an, t, n=15):
         an.rot('spine', yaw=8)
         an.rot('chest', yaw=12, pitch=4)
         an.rot('head', yaw=-10)
-        racket_up(an, arm=(0.15, -0.55, -0.82), fore=(0.35, -0.9, -0.2), racket=(0.25, -0.75, -0.6))
+        racket_up(an, arm=(0.15, -0.55, -0.82), fore=(0.35, -0.9, -0.2), racket=(0.25, -0.75, -0.6), normal=(-0.79, 0.26, -0.55))
         if t.pocket:
             an.rot('armL', pitch=2)
         else:

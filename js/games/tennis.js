@@ -14,7 +14,7 @@ MabarRacket.define({
   envFallback: 'assets/tennis_court.glb', // the stadium, if the island can't load
   character: 'ch_tennis',   // chibi fallback (assets/characters.glb)
   charScale: 3.3,
-  characters: ['bunny', 'dog'], // animated animals, side 0 / side 1 (js/character.js)
+  characters: ['bunny', 'dog', 'cat', 'panda', 'chimp', 'lioness'], // animated animals, one per player by seat slot (js/character.js)
   characterScale: 1.8,          // the animal models are 1 m tall
   serveClip: 'serve',           // overhead serve (Table Tennis serves with the forehand)
   court: {
@@ -23,11 +23,15 @@ MabarRacket.define({
     halfWDoubles: 5.485,
     surface: 0,
     onSurface: () => true,
+    landMax: 0.958,         // the baseline, as a fraction of `line` (balls past it are long)
+    net: 0.914,
   },
   arc: { contact: 1.0, peak: 1.75, peak2: 0.9 },
   ballR: 0.11, ballColor: '#d7f53b',
   serveT: 2.0, serveTP: 0.7, shotT: 2.1, shotTP: 0.9, cpuHard: 1.6,
-  reach: 1.0, standBack: 0.3, runSpeed: 4, moveRate: 4, maxStep: 1.3,
+  reach: 1.0, standBack: 0.3, runSpeed: 4, moveRate: 4,
+  crossTime: 1.7,         // seconds to run from sideline to sideline: what makes placement count
+  deepest: 1.18, bounceSpeed: 0.7,
   cam: { back: 8.5, height: 6.3, rise: 0.5, push: 1.0, lookY: 0.2, ahead: -0.12, track: 0.4, follow: 0.4, fov: 50 },
   orbit: [27, 17, 0],
   sky: '#8fd3ff', fog: [70, 150], shadowSize: 30, sun: [14, 24, 9],

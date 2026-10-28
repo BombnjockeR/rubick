@@ -14,4 +14,4 @@ Method: flat-shaded top-down orthographic render at 4096², colour masks for the
 | Original net | a tall panel ~1.2 m off the court's centre line, box posts outside the court |
 | Hole | at one court corner, reaching past the surround |
 
-Scaling the court length to 23.77 m gives ×89.9 (island ≈ 90 m across). Because the court's proportions can't match a real one, the build covers it with a regulation court on a plinth; the measured numbers only position and scale the island around it.
+Scaling the court length to 23.77 m gives ×89.9 (island ≈ 90 m across). Because the court's proportions can't match a real one, the build covers it with a regulation court on a plinth; the measured numbers only position and scale the island around it. The red surround is then 28 × 33 m around an 11 × 24 m court; since 2026-10-28 the generated grandstands stand on it 3.8 m outside the doubles lines and 5.1 m behind the baselines, which fills the width and keeps the end stands below the chase cameras (at |z| ≈ 21–23 m, 6.3 m up).

@@ -10,6 +10,8 @@
     "assets": "GLTF_TRANSFORM=./node_modules/.bin/gltf-transform ./art/build.sh",
     "assets:animals": "GLTF_TRANSFORM=./node_modules/.bin/gltf-transform ./art/build.sh animals island",
     "assets:landing": "GLTF_TRANSFORM=./node_modules/.bin/gltf-transform ./art/build.sh landing",
+    "assets:island": "GLTF_TRANSFORM=./node_modules/.bin/gltf-transform ./art/build.sh island",
+    "assets:kitchens": "GLTF_TRANSFORM=./node_modules/.bin/gltf-transform ./art/build.sh kitchen kitchens",
     "smoke": "node tools/smoke.mjs"
   },
   "devDependencies": {

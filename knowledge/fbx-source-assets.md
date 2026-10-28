@@ -1,13 +1,20 @@
 # FBX source assets (`art/source/`)
 
-Verified 2026-10-27 by inspecting the files with `file`, `sips`, `strings` and `shasum`, then importing them in Blender 5.3 (headless) and rendering them.
+Verified 2026-10-27 (characters, tennis island, floating island) and 2026-10-28 (cooking dioramas) by inspecting the files with `file`, `sips`, `strings` and `shasum`, then importing them in Blender 5.3 (headless) and rendering them.
 
 | Model | FBX | Mesh | Texture |
 | --- | --- | --- | --- |
 | `characters/bunny/cartoon_bunny_3d_model.fbx` | 380 KB, binary | 5,506 verts, 10,734 tris, 15 separate pieces | `cartoon_bunny_3d_model.fbm/…_basecolor.jpg`, 4096², 2.4 MB |
 | `characters/dog/cartoon_dog_3d_model.fbx` | 400 KB, binary | 5,550 verts, 11,045 tris, 1 main piece + racket strings | `cartoon_dog_3d_model.fbm/…_basecolor.jpg`, 4096², 3.0 MB |
+| `characters/cat/cute_cat_girl_3d_model.fbx` | 407 KB, binary | 5,631 verts, 6,181 faces, 11 pieces, T-pose, open hands | `cute_cat_girl_3d_model.fbm/…_basecolor.jpg`, 4096², 2.8 MB |
+| `characters/chimp/stylized_chimp_3d_model.fbx` | 434 KB, binary | 5,638 verts, 6,607 faces, 22 pieces (incl. 2 stray cones), T-pose, fists | `stylized_chimp_3d_model.fbm/…_basecolor.jpg`, 4096², 4.3 MB |
+| `characters/lioness/anthropomorphic_cheetah_3d_model.fbx` | 382 KB, binary | 5,405 verts, 5,740 faces, 4 pieces, T-pose, gloved fists | `anthropomorphic_cheetah_3d_model.fbm/…_basecolor.jpg`, 4096², 4.5 MB |
+| `characters/panda/panda_3d_character.fbx` | 407 KB, binary | 5,653 verts, 6,337 faces, 25 pieces, T-pose, mitten paws (pads forward) | `panda_3d_character.fbm/…_basecolor.jpg`, 4096², 3.0 MB |
 | `environments/tennis/island_tennis_court_3d_model.fbx` | 320 KB, binary | 5,572 verts, 6,856 tris, 394 pieces | `island_tennis_court_3d_model.fbm/…_basecolor.jpg`, 4096², 3.7 MB |
 | `environments/landingpage/floating island game 3d model/floating_island_game_3d_model.fbx` | 356 KB, binary | 5,565 verts, 4,960 faces (3,184 quads), 311 pieces | `floating_island_game_3d_model.fbm/…_basecolor.jpg`, 4096², 4.2 MB |
+| `environments/cooking/village kitchen 3d model/village_kitchen_3d_model.fbx` | 326 KB, binary (Tripo) | 5,569 verts, 4,182 faces, 387 pieces, leans back 19° | `village_kitchen_3d_model.fbm/…_basecolor.jpg`, 4096², 4.3 MB |
+| `environments/cooking/beach market 3d model/beach_market_3d_model.fbx` | 328 KB, binary | 5,600 verts, 4,605 faces, 357 pieces, leans back 37° | `beach_market_3d_model.fbm/…_basecolor.jpg`, 4096², 4.2 MB |
+| `environments/cooking/island market 3d model/island_market_3d_model.fbx` | 319 KB, binary (Tripo) | 5,476 verts, 4,406 faces, 393 pieces, leans back 15° | `island_market_3d_model.fbm/…_basecolor.jpg`, 4096², 4.1 MB |
 
 SHA-256 of the originals (to check they're untouched): bunny FBX `97f19229…`, dog FBX `78fc448f…`, island FBX `18b785b1…`, floating island FBX `52dfff64…`.
 
@@ -15,9 +22,10 @@ SHA-256 of the originals (to check they're untouched): bunny FBX `97f19229…`, 
 
 - **No rig, no animation**: one mesh object each, no armature, vertex groups, shape keys or actions.
 - **Scale and orientation**: normalized so the largest dimension is 1.0 (characters 1.0 tall including ears / hair; island 1.0 across), feet on z = 0, facing −Y in Blender (the "front" view), Z up after import. The bodies are not centred on the origin (bunny pelvis at x 0.037, y 0.045; dog at x 0.03, y −0.045).
-- **Pose**: both characters stand arms-down. The racket is in the right hand: three separate pieces for the bunny, fused into the fist for the dog. The bunny's left fist rests on its hip; the dog's left hand is sunk into its shorts pocket.
+- **Pose**: the bunny and dog stand arms-down. The racket is in the right hand: three separate pieces for the bunny, fused into the fist for the dog. The bunny's left fist rests on its hip; the dog's left hand is sunk into its shorts pocket. The cat, chimp, lioness and panda (added 2026-10-28) stand in a T-pose with no racket; see [tpose-character-rigging.md](tpose-character-rigging.md).
 - **Materials**: one material per model; only a base-color map (sRGB) is linked, roughness 0.9, plus unused Mapping / Normal Map nodes. Face normals are consistent (0–3 faces flip on "recalculate outside"); custom split normals are present.
 - **Textures are linked by a relative path** `<name>.fbm/<name>_basecolor.jpg`. Keep each `.fbx` and its `.fbm/` folder side by side, and don't rename either; renaming parent folders is safe.
 - **Frame rate**: importing sets the scene to 24 fps (see [blender-headless-pipeline.md](blender-headless-pipeline.md)).
-- **Island**: the court is not regulation-shaped and has a hole at one corner; measurements in [island-court.md](island-court.md).
+- **Island**: the court is not regulation-shaped and has a hole at one corner; measurements in [island-court.md](island-court.md). Its three stands are stretched boxes with bench planks and spectator blobs on top; a 35-vertex sheet 0.27 × 0.43 units across (a tarp of stretched faces, surface area 8 % of its bounding box) covers one of them, the streamers are single triangles, and the pennant lines between the banner poles are draped cloths wider than tall. `art/island.py` finds all of them by shape (fill ratio, thinness, orientation), not by id.
+- **Cooking dioramas** (verified 2026-10-28, [`art/kitchens.py`](../art/kitchens.py)): generated by Tripo from isometric pictures, each sits on a plane that leans back about the X axis (19°, 37°, 15°: a plane fitted through the bottoms of the counter-sized pieces, residual 1–2 cm) and barely about Y. Their stations are painted onto counter-sized boxes at an uneven pitch (0.05–0.08 units), so a 1 m tile grid fits them only to about ±0.3 m; the game replaces them anyway. Water is painted on the same big ground triangles as the land (one colour per face does not separate them). The boats, huts and bridges are loose pieces like everything else.
 - **Floating island** (landing page; verified 2026-10-27 by inspection and renders): one object, 1 unit across, Z up, the entrance bridge towards −Y. The landmass (islands, plaza, bridges) is one connected piece of 1,250 vertices; props are loose pieces. The islands are open shells (no underside: from below you see the back of the courts). Broken parts: the plaza statue is a spike of stretched faces, two blimps overlap with their fins floating beside them and a rope to the tennis island, the windmill is a bare pole with a floating vane, several "islets" are plain cubes, and some pennant strings are flat strips fused into the landmass. The tennis court and the table tops are thin separate sheets (6 and 8 vertices), easy to find by colour. `art/landing_island.py` handles all of this by rule.

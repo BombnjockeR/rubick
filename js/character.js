@@ -1,4 +1,5 @@
-// Skinned, animated characters: the rigged animals built by art/animals.py.
+// Skinned, animated characters: the rigged animals built by art/animals.py
+// (bunny, dog, cat, panda, chimp, lioness).
 //
 //   MabarChars.load('bunny')                  // Promise; rejects if the .glb can't load
 //     .then(() => {
@@ -46,6 +47,12 @@ window.MabarChars = (() => {
       tool: 'racket',
       outfits: { default: {} },
     },
+    // The T-posed models (art/animals.py 'auto' entries): same skeleton, same clips,
+    // a generated racket and paddle in the right fist.
+    cat: { name: 'Cat', url: 'assets/cat.glb', height: 1.0, scale: 1, offset: [0, 0, 0], rotationY: 0, walkSpeed: 0.375, runSpeed: 0.99, strafeSpeed: 0.44, tool: 'racket', outfits: { default: {} } },
+    panda: { name: 'Panda', url: 'assets/panda.glb', height: 1.0, scale: 1, offset: [0, 0, 0], rotationY: 0, walkSpeed: 0.375, runSpeed: 0.99, strafeSpeed: 0.44, tool: 'racket', outfits: { default: {} } },
+    chimp: { name: 'Chimp', url: 'assets/chimp.glb', height: 1.0, scale: 1, offset: [0, 0, 0], rotationY: 0, walkSpeed: 0.375, runSpeed: 0.99, strafeSpeed: 0.44, tool: 'racket', outfits: { default: {} } },
+    lioness: { name: 'Lioness', url: 'assets/lioness.glb', height: 1.0, scale: 1, offset: [0, 0, 0], rotationY: 0, walkSpeed: 0.375, runSpeed: 0.99, strafeSpeed: 0.44, tool: 'racket', outfits: { default: {} } },
   };
 
   const BASE = ['idle', 'ready', 'walk', 'run', 'strafeL', 'strafeR'];   // loops weighted by update()

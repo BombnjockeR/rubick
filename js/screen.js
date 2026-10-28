@@ -266,8 +266,8 @@
       case 'in': applyInput(p, msg.x, msg.y, msg.b); break;
       case 'ping': hub.send(p, { t: 'pong', ts: msg.ts }); break;
       case 'rtt': p.rtt = Math.round(Number(msg.ms) || 0); break;
-      case 'swing':
-        if (game && game.swing) game.swing(p, Math.max(0, Math.min(1, Number(msg.power) || 0)));
+      case 'swing':   // power 0..1; dx / dy (-1..1, optional) = which way the phone moved
+        if (game && game.swing) game.swing(p, Math.max(0, Math.min(1, Number(msg.power) || 0)), { x: Number(msg.dx) || 0, y: Number(msg.dy) || 0 });
         break;
       case 'action':
         if (game && game.action) game.action(p);
@@ -408,7 +408,7 @@
 
   // ---------- Keyboard player (testing without a phone) ----------
   const keys = new Set();
-  const KB_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyE', 'Enter']);
+  const KB_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyE', 'KeyX', 'Enter']);
 
   window.addEventListener('keydown', (e) => {
     if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
@@ -436,6 +436,7 @@
     if (keys.has('KeyD') || keys.has('ArrowRight')) b |= B.RIGHT;
     if (keys.has('Space') || keys.has('Enter')) b |= B.A;
     if (keys.has('KeyE')) b |= B.B;
+    if (keys.has('KeyX')) b |= B.X;
     applyInput(p, 0, 0, b);
   }
 

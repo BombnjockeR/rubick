@@ -12,7 +12,9 @@ Belongs elsewhere: architecture → `docs/ARCHITECTURE.md`, workflows → `docs/
 
 ## Notes
 
-- [fbx-source-assets.md](fbx-source-assets.md) — what the FBX models in `art/source/` contain and how their textures are linked
-- [blender-headless-pipeline.md](blender-headless-pipeline.md) — Blender 5.3 CLI quirks: arguments, frame rate on FBX import, weights, glTF clips, meshopt
+- [fbx-source-assets.md](fbx-source-assets.md) — what the FBX models in `art/source/` contain, how their textures are linked, what is broken in the island and how the cooking dioramas lean
+- [blender-headless-pipeline.md](blender-headless-pipeline.md) — Blender 5.3 CLI quirks: arguments, frame rate on FBX import, weights, glTF clips, meshopt and quantization, levelling a tilted import
 - [threejs-skinned-characters.md](threejs-skinned-characters.md) — cloning, culling, blending and layering skinned characters with the vendor three.js
 - [island-court.md](island-court.md) — how the island's court was measured and the numbers `art/island.py` uses
+- [tpose-character-rigging.md](tpose-character-rigging.md) — rigging T-posed AI characters by script: which joints can be read off the mesh, loose pieces, arm drop, racket face control, short arms, a bash 3 pitfall
+- [phone-motion-sensors.md](phone-motion-sensors.md) — **proposed**: how swing direction and tilt are read from `devicemotion`, and the sign conventions to check on real phones

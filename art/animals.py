@@ -1,15 +1,22 @@
 """Builds the rigged, animated animal characters from the source FBX files.
 
-    blender -b --factory-startup --python art/animals.py -- <out_dir> [bunny dog]
-    python3.13 art/animals.py <out_dir> [bunny dog]          (pip install bpy)
+    blender -b --factory-startup --python art/animals.py -- <out_dir> [bunny dog cat ...]
+    python3.13 art/animals.py <out_dir> [bunny dog cat ...]   (pip install bpy)
 
 Inputs (local only, never modified): art/source/characters/<id>/*.fbx + .fbm/
-Outputs in <out_dir>: <id>.glb (skinned mesh + clips idle, walk, run, jump,
-victory, swing) and, with --blend, <id>_rigged.blend for inspection.
+Outputs in <out_dir>: <id>.glb (skinned mesh, prop_racket, prop_paddle and the
+clips of art/clips.py) and, with --blend, <id>_rigged.blend for inspection.
 
-Landmarks are joint positions measured on the source model (source FBX
-coordinates: meters, Z up, facing -Y). To add a character, copy an entry in
-CHARACTERS, measure its joints (see docs/ASSET_PIPELINE.md) and rebuild.
+Two kinds of entry in CHARACTERS:
+  - measured (bunny, dog): the model stands arms-down holding a racket; its joints
+    were measured by hand ('joints', source FBX coordinates: meters, Z up, facing
+    -Y) and the racket is split off the mesh;
+  - 'auto' (cat, chimp, lioness, panda): a T-posed model without a racket; joints
+    come from art/landmarks.py (plus 'overrides' for the ears and tail), the arms
+    are dropped into a relaxed rest pose after skinning, and a racket and a paddle
+    are generated in the right fist.
+To add a T-posed character: copy an 'auto' entry, point it at the FBX, look at the
+skeleton check (docs/ASSET_PIPELINE.md), fix what it got wrong with 'overrides'.
 """
 import os
 import sys
@@ -18,8 +25,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import math  # noqa: E402
 
 import numpy as np  # noqa: E402
-from mathutils import Quaternion, Vector  # noqa: E402
+from mathutils import Matrix, Quaternion, Vector  # noqa: E402
 import clips  # noqa: E402
+import landmarks  # noqa: E402
 import rig  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -80,6 +88,60 @@ CHARACTERS = {
                              'donor_radius': 0.045, 'forearm': 0.05},
                     'free_arm': {'side': 'L', 'radius': 0.048, 'pitch': -30, 'out': 12, 'lift': False}},
         'traits': {'ears': 'floppy', 'pocket': False, 'tail': 1.0},
+    },
+    # ---- T-posed models (no racket): joints by art/landmarks.py. 'grip' says how the
+    # modelled hand would hold a stick in the T-pose: 'shaft' through the fist toward
+    # the racket head, 'back' the back of the hand. 'rest' drops the arms after skinning
+    # (degrees out from vertical, forearm forward). Overrides are in source coordinates.
+    'cat': {
+        'fbx': 'cat/cute_cat_girl_3d_model.fbx',
+        'auto': {'hand_len': 0.10, 'fist_in': 0.05},     # open hand: the palm, not the fingers
+        'grip': {'shaft': (0, -1, 0), 'back': (0, 0, 1)},   # palm down, fingers out
+        'overrides': {
+            'earL0': (0.12, -0.05, 0.88), 'earL1': (0.14, -0.055, 0.94), 'earL2': (0.16, -0.06, 0.995),
+            'earR0': (-0.12, -0.05, 0.88), 'earR1': (-0.14, -0.055, 0.94), 'earR2': (-0.16, -0.06, 0.995),
+            'tail0': (0.0, 0.06, 0.36), 'tail1': (0.0, 0.15, 0.29), 'tail2': (0.0, 0.25, 0.45),
+        },
+        'rest': {'out': 26, 'fwd': 14},
+        'racket': {'color': '#8b5cf6'},
+        'traits': {'ears': 'up', 'pocket': False, 'tail': 1.0},
+    },
+    'chimp': {
+        'fbx': 'chimp/stylized_chimp_3d_model.fbx',
+        'auto': {},
+        'grip': {'shaft': (0, -1, 0), 'back': (0, 0, 1)},   # fist, knuckles out, thumb forward
+        'overrides': {                                      # no ears or tail to see: stubs inside the body
+            'tail0': (0.0, 0.10, 0.33), 'tail1': (0.0, 0.12, 0.33), 'tail2': (0.0, 0.14, 0.33),
+        },
+        'rest': {'out': 32, 'fwd': 12},                     # wide: the hoodie is bulky
+        'racket': {'color': '#ff9f1c'},
+        'traits': {'ears': 'none', 'pocket': False, 'tail': 0.0},
+    },
+    'lioness': {
+        'fbx': 'lioness/anthropomorphic_cheetah_3d_model.fbx',
+        'auto': {},
+        'grip': {'shaft': (0, -1, 0), 'back': (0, 0, 1)},   # gloved fist, knuckles out
+        'overrides': {
+            'earL0': (0.12, -0.04, 0.89), 'earL1': (0.145, -0.045, 0.93), 'earL2': (0.165, -0.05, 0.965),
+            'earR0': (-0.12, -0.04, 0.89), 'earR1': (-0.145, -0.045, 0.93), 'earR2': (-0.165, -0.05, 0.965),
+            'tail0': (0.0, 0.07, 0.42), 'tail1': (0.0, 0.14, 0.29), 'tail2': (0.0, 0.22, 0.37),
+        },
+        'rest': {'out': 24, 'fwd': 14},
+        'racket': {'color': '#f4b400'},
+        'traits': {'ears': 'up', 'pocket': False, 'tail': 1.0},
+    },
+    'panda': {
+        'fbx': 'panda/panda_3d_character.fbx',
+        'auto': {},
+        'grip': {'shaft': (0, 0, 1), 'back': (0, 1, 0)},    # mitten paw, pads forward
+        'overrides': {
+            'earL0': (0.14, -0.03, 0.845), 'earL1': (0.19, -0.03, 0.90), 'earL2': (0.24, -0.03, 0.95),
+            'earR0': (-0.14, -0.03, 0.845), 'earR1': (-0.19, -0.03, 0.90), 'earR2': (-0.24, -0.03, 0.95),
+            'tail0': (0.0, 0.07, 0.345), 'tail1': (0.0, 0.11, 0.345), 'tail2': (0.0, 0.16, 0.35),
+        },
+        'rest': {'out': 30, 'fwd': 12},
+        'racket': {'color': '#2f7dff'},
+        'traits': {'ears': 'up', 'pocket': False, 'tail': 0.6},
     },
 }
 
@@ -220,32 +282,75 @@ def centred(cfg):
     return {k: (v[0] - cx, v[1] - cy, v[2]) for k, v in cfg['joints'].items()}
 
 
+def auto_landmarks(cid, cfg, mesh):
+    """Joints of a T-posed model (art/landmarks.py), the mesh moved so the pelvis is
+    at the origin, the grip joints set from how its hand would hold a stick."""
+    n_pieces, n_faces, n_flip = rig.tidy_mesh(mesh)
+    print(f'{cid}: tidy: {n_pieces} loose scraps and {n_faces} empty faces removed, {n_flip} normals flipped')
+    P, E = rig.mesh_arrays(mesh)
+    J, (cx, cy), info = landmarks.auto_joints(P, rig.components(len(P), E), overrides=cfg.get('overrides'), **cfg['auto'])
+    shaft = np.asarray(cfg['grip']['shaft'], float)
+    for side in 'LR':
+        J['grip' + side] = tuple(np.asarray(J['fist' + side]) + 0.07 * shaft)
+    mesh.data.transform(Matrix.Translation(Vector((-cx, -cy, 0))))
+    J = {k: (v[0] - cx, v[1] - cy, v[2]) for k, v in J.items()}
+    print(f'{cid}: landmarks: arms at z {info["armZ"]:.2f}, crotch {info["crotch"]:.2f}, head top {info["topZ"]:.2f}; pelvis was at ({cx:.3f}, {cy:.3f})')
+    return J
+
+
+def relax_arms(cfg, J):
+    """The pose that becomes a T-posed model's rest: arms hanging `out` degrees from
+    vertical, forearms `fwd` degrees forward, hands turned so the back of the hand
+    faces out (a racket in the fist then hangs beside the leg, strings in the
+    sagittal plane)."""
+    out, fwd = math.radians(cfg['rest']['out']), math.radians(cfg['rest']['fwd'])
+
+    def pose(an):
+        for side, sgn in (('R', -1), ('L', 1)):
+            an.aim('arm' + side, (sgn * math.sin(out), 0.04, -math.cos(out)))
+            an.aim('forearm' + side, (sgn * math.sin(out * 0.6), -math.sin(fwd), -math.cos(out * 0.6) * math.cos(fwd)))
+            an.aim('hand' + side, (0.0, -0.2, -0.98), ref='sockHand' + side, normal=(sgn, 0, 0))
+    return pose
+
+
 def build(cid, out_dir, save_blend=False, tex_size=1024):
     cfg = CHARACTERS[cid]
     rig.reset()
-    cx, cy = cfg['center']
-    mesh = rig.load_mesh(os.path.join(SRC, cfg['fbx']), f'{cid}_body', offset=(cx, cy, 0))
-    rig.clean_material(mesh, 'body')
-    J = remodel(mesh, cfg, centred(cfg))
+    tpose = 'auto' in cfg
+    if tpose:
+        mesh = rig.load_mesh(os.path.join(SRC, cfg['fbx']), f'{cid}_body')
+        rig.clean_material(mesh, 'body')
+        J = auto_landmarks(cid, cfg, mesh)
+    else:
+        cx, cy = cfg['center']
+        mesh = rig.load_mesh(os.path.join(SRC, cfg['fbx']), f'{cid}_body', offset=(cx, cy, 0))
+        rig.clean_material(mesh, 'body')
+        J = remodel(mesh, cfg, centred(cfg))
     arm = rig.build_rig(f'ch_{cid}', J)
     missed = rig.heat_bind(mesh, arm)
     print(f'{cid}: heat weights done, {missed} vertices unweighted before cleanup')
     sk = rig.Skin(mesh, J)
     sk.fill_unweighted()
-    n_sep = 0
-    for s in 'LR':
-        n_sep += sk.separate_limb([f'shoulder{s}', f'elbow{s}', f'wrist{s}', f'fist{s}'],
-                                  [f'arm{s}', f'forearm{s}', f'hand{s}'],
-                                  ['hips', 'spine', 'chest', 'neck'], ['hips', 'spine', 'chest'],
-                                  top=J[f'shoulder{s}'][2] - 0.02)
-    print(f'{cid}: {n_sep} torso vertices freed from arm bones')
+    if not tpose:   # arms modelled against the body: keep the shirt off the arm bones
+        n_sep = 0
+        for s in 'LR':
+            n_sep += sk.separate_limb([f'shoulder{s}', f'elbow{s}', f'wrist{s}', f'fist{s}'],
+                                      [f'arm{s}', f'forearm{s}', f'hand{s}'],
+                                      ['hips', 'spine', 'chest', 'neck'], ['hips', 'spine', 'chest'],
+                                      top=J[f'shoulder{s}'][2] - 0.02)
+        print(f'{cid}: {n_sep} torso vertices freed from arm bones')
     sk.rigid_hand('handR', 'fistR', ['armR', 'forearmR', 'handR'])
     sk.rigid_hand('handL', 'fistL', ['armL', 'forearmL', 'handL'])
-    # Shorts never follow the arms (a hand rested on, or in, them in the source pose).
-    shorts_col, shorts_tol = cfg['shorts']
-    vshorts = vertex_share(mesh, np.linalg.norm(rig.face_colors(mesh) - np.asarray(shorts_col), axis=1) < shorts_tol)
-    for side in 'LR':
-        sk.release([f'arm{side}', f'forearm{side}', f'hand{side}'], vshorts, to=('hips', 'spine'))
+    if cfg.get('shorts'):   # shorts never follow the arms (a hand rested on, or in, them in the source pose)
+        shorts_col, shorts_tol = cfg['shorts']
+        vshorts = vertex_share(mesh, np.linalg.norm(rig.face_colors(mesh) - np.asarray(shorts_col), axis=1) < shorts_tol)
+        for side in 'LR':
+            sk.release([f'arm{side}', f'forearm{side}', f'hand{side}'], vshorts, to=('hips', 'spine'))
+    traits = cfg['traits']
+    if traits.get('ears') == 'none':   # stub bones: nothing may follow them
+        sk.release(['earL1', 'earL2', 'earR1', 'earR2'], np.ones(len(sk.P)), to=('head',))
+    if not traits.get('tail'):
+        sk.release(['tail1', 'tail2'], np.ones(len(sk.P)), to=('hips',))
     turn = (cfg.get('remodel') or {}).get('free_arm')
     if turn:   # the freed forearm moves only with its arm; what it was cut from never does
         s = turn['side']
@@ -257,8 +362,10 @@ def build(cid, out_dir, save_blend=False, tex_size=1024):
         sk.release(chain, ~lifted & (tv > 0.42) & (dv < 0.12), to=('hips', 'spine', 'chest'))
         sk.absorb(chain, lifted)
     rk = cfg['racket']
-    box = tuple(tuple(np.subtract(c, (cx, cy, 0))) for c in rk['box'])
-    racket_mask = sk.rigid_region('handR', box, whole_parts=rk.get('whole_parts', False), keep=rk.get('keep'))
+    racket_mask = np.zeros(len(sk.P), bool)
+    if 'box' in rk:   # a modelled racket: everything in the box follows the hand
+        box = tuple(tuple(np.subtract(c, (cx, cy, 0))) for c in rk['box'])
+        racket_mask = sk.rigid_region('handR', box, whole_parts=rk.get('whole_parts', False), keep=rk.get('keep'))
     n_racket = int(racket_mask.sum())
     pin = cfg.get('pin')
     n_pin = sk.pin_limb(['elbowL', 'wristL', 'fistL'], ['armL', 'forearmL', 'handL'],
@@ -268,21 +375,33 @@ def build(cid, out_dir, save_blend=False, tex_size=1024):
         legs = ['thighL', 'shinL', 'footL'] if side > 0 else ['thighR', 'shinR', 'footR']
         sk.keep_side(legs, side, margin=0.0)
     sk.rigid_feet({'footL': J['ankleL'][2], 'footR': J['ankleR'][2]})
+    print(f'{cid}: {sk.attach_small()} vertices of small loose pieces attached to what they sit on')
     sk.unify_components(max_size=100)
     sk.smooth(iters=4, alpha=0.4)
     sk.finalize()
     print(f'{cid}: racket {n_racket} verts rigid to handR, pocket pin on {n_pin} verts')
-    # Tools: the modelled racket becomes its own mesh, and a table-tennis paddle is
-    # made for the same grip; the game shows one of them (prop_racket / prop_paddle).
-    racket = rig.split_off(mesh, racket_mask, 'prop_racket')
-    paddle = rig.build_paddle(arm, J['fistR'], sk.P[racket_mask])
+    # Tools: one racket and one paddle in the right fist; the game shows one of them
+    # (prop_racket / prop_paddle). A modelled racket is split off the mesh and sets
+    # the grip frame; a T-posed model gets both generated once its arms are down.
+    soles = sole_points(sk.P)
+    if tpose:
+        back = Vector(cfg['grip']['back'])
+        normals = {f'sockHand{s}': arm.data.bones[f'sockHand{s}'].matrix_local.to_3x3().inverted() @ back for s in 'LR'}
+        rig.apply_pose_as_rest([mesh], arm, relax_arms(cfg, J), normals=normals)
+        print(f'{cid}: arms dropped {cfg["rest"]["out"]} deg out of vertical, forearms {cfg["rest"]["fwd"]} deg forward')
+        frame = rig.ToolFrame.from_socket(arm, normal=(-1, 0, 0))
+        racket = rig.build_racket(arm, frame, color=rk.get('color', '#ff4757'))
+    else:
+        racket = rig.split_off(mesh, racket_mask, 'prop_racket')
+        frame = rig.ToolFrame.from_points(J['fistR'], sk.P[racket_mask])
+    paddle = rig.build_paddle(arm, frame)
     if turn:   # move the freed forearm forward and out for good (new rest pose)
         s = turn['side']
         sign = 1 if s == 'L' else -1
         rig.apply_pose_as_rest([mesh], arm, lambda a: a.rot(f'forearm{s}', pitch=turn['pitch'], side=-turn['out'] * sign))
         print(f'{cid}: {s} forearm re-posed {turn["pitch"]} deg forward / {turn["out"]} deg out')
-    an = rig.Anim(arm, soles=sole_points(sk.P))
-    acts = clips.make_all(an, clips.Traits(**cfg['traits']))
+    an = rig.Anim(arm, soles=soles, tool_normal=frame.local_normal(arm))
+    acts = clips.make_all(an, clips.Traits(**traits))
     print(f'{cid}: clips ' + ', '.join(f'{a.name} ({int(a.frame_range[1])}f)' for a in acts))
     rig.downsize_texture(mesh, tex_size, os.path.join(out_dir, '_tex'))
     if save_blend:   # rigged, animated character for inspection in Blender (texture packed in)

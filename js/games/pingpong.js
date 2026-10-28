@@ -11,7 +11,7 @@ MabarRacket.define({
   env: 'assets/tt_hall.glb',
   character: 'ch_tt',          // chibi fallback (assets/characters.glb)
   charScale: 3.0,
-  characters: ['bunny', 'dog'], // same animals as Tennis (js/character.js)...
+  characters: ['bunny', 'dog', 'cat', 'panda', 'chimp', 'lioness'], // same animals as Tennis (js/character.js)...
   characterScale: 1.55,
   tool: 'paddle',               // ...holding a table-tennis paddle instead of the racket
   court: {
@@ -19,11 +19,15 @@ MabarRacket.define({
     halfW: 0.7625,
     surface: 0.76,          // table height
     onSurface: (x, z) => Math.abs(x) <= 0.7625 && Math.abs(z) <= 1.37,
+    landMax: 0.797,         // the table's end, as a fraction of `line`
+    net: 0.1525,
   },
   arc: { contact: 0.2, peak: 0.24, peak2: 0.12 },
   ballR: 0.035, ballColor: '#ffffff',
   serveT: 1.5, serveTP: 0.6, shotT: 1.35, shotTP: 0.73, cpuHard: 0.75,
-  reach: 0.55, standBack: 0.35, runSpeed: 1.5, moveRate: 6, maxStep: 3,
+  reach: 0.55, standBack: 0.35, runSpeed: 1.5, moveRate: 6,
+  crossTime: 0.9,         // seconds from one side of the table to the other
+  deepest: 1.2, bounceSpeed: 0.85,
   cam: { back: 3.1, height: 3.5, rise: 0.1, push: 0.3, lookY: 0.55, ahead: -0.45, track: 0.5, follow: 0.4, fov: 50 }, // high enough to see over the big animal heads
   orbit: [6.5, 3.8, 0.6],
   sky: '#f6e8d8', fog: [25, 60], shadowSize: 7, sun: [4, 9, 3],

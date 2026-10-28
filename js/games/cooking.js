@@ -1,90 +1,166 @@
-// Cooking: Overcooked-style co-op kitchen for 1-4 chefs.
+// Cooking: Overcooked-style co-op kitchen for 1-4 chefs, on Indonesian menus.
 //
-// Orders arrive at the top of the screen; the team cooks and serves them
-// before their timers run out. 3-minute shift, then a star rating.
-//   Tomato Soup  - 3 chopped tomatoes in a pot, cooked, onto a plate
-//   Onion Soup   - 3 chopped onions in a pot, cooked, onto a plate
-//   Salad        - chopped lettuce + chopped tomato on a plate
-// Controls (phone gamepad): stick/d-pad move, A pick up / put down,
-// X chop (tap or hold), B dash.
+// Orders arrive at the top of the screen; the team cooks and serves them before
+// their patience runs out. A 4-minute shift, then stars.
+//   Paddy Field  gado-gado, nasi liwet, tahu goreng sambal
+//   Beach        ikan bakar bowl, cumi goreng tepung, udang saus padang
+//   Pontianak    bakmi kepiting, selade pontianak, es jeruk nipis
+// The pool is deliberately small: 11 ingredients, five station types (board,
+// sink, cooker, fryer, dish stack) plus the serving hatch and the bin, and every
+// recipe is "take, prepare, cook, plate, serve". Maps change the layout, not the
+// vocabulary (kitchens: js/games/kitchens.js, built into assets/kitchen_*.glb by
+// art/kitchens.py; station and food models: assets/kitchen.glb, art/kitchen.py).
 //
-// Station models come from assets/kitchen.glb (art/kitchen.py, Blender); the
-// layout below decides where they go, so new kitchens are just new maps.
+// Controls (phone gamepad): stick/d-pad move, A pick up / put down / use,
+// X (hold) chop, rinse or scrape a burnt pot, B dash. Laptop: WASD, Space, X, E.
+//
+// Rules in one breath: ingredients come from crates; chop at a board (X), rinse
+// rice at the sink (X); pots boil up to three things together and fryers fry one;
+// cooked food has a grace window, then burns and the pot must be scraped; plates
+// come from the dish stack and go back there a while after serving; put anything
+// down on a counter; a plate whose parts match an order is served at the hatch.
 MabarGames.register({
   id: 'cooking',
   name: 'Cooking',
-  blurb: 'Co-op kitchen chaos: chop, cook, plate and serve orders before time runs out.',
+  blurb: 'Co-op kitchen chaos: chop, cook, plate and serve Indonesian dishes before time runs out.',
   controls: 'pad',
 
   create(hub) {
     const B = hub.B;
+    const K = window.MabarKitchens || {};
+    const MAP_IDS = Object.keys(K);
 
-    // ---------------- layout ----------------
-    //  # counter   T/L/O crates (tomato, lettuce, onion)   C chopping board
-    //  S stove + pot   P plates   W serving window   X bin   . floor
-    const MAP = [
-      '#T#L#O#S#S##',
-      '#..........W',
-      'C..........W',
-      'C...####...#',
-      '#...P###...#',
-      '#..........X',
-      '#..........#',
-      '##C####P####',
+    // ---------------- rules / tuning ----------------
+    const ROOM_TIME = 30, SHIFT = 240, COUNTDOWN = 3, RESULTS = 12;
+    const BOIL = 8, BOIL_GRACE = 12, FRY = 6, FRY_GRACE = 10;    // seconds to cook, then to burn
+    const CHOP = 1.6, RINSE = 1.4, SCRAPE = 2.0;                 // seconds of holding X
+    const POT_MAX = 3, PLATE_MAX = 4, PLATES = 5, PLATE_RETURN = 9;
+    const MAX_CHEFS = 4, SPEED = 3.6, RADIUS = 0.3, DASH = 0.2, DASH_CD = 0.75, DASH_SPEED = 7.5;
+    const TOP = 0.55;                                            // counter height (art/kitchen.py)
+    const CHAR_SCALE = 1.3;                                      // the animals are 1 m tall at scale 1
+    const ANIMALS = ['bunny', 'dog', 'cat', 'panda', 'chimp', 'lioness'];   // one per seat slot, like the racket games
+
+    // Ingredients: how each is prepared before it can be cooked or plated.
+    //   prep: the station step a raw one needs (board = chop, sink = rinse)
+    //   boil / fry: the state it goes into the pot or fryer with, and what comes out
+    const ING = {
+      rice: { name: 'rice', color: '#f6f2e8', prep: 'sink', boil: ['rinsed', 'cooked'] },
+      noodles: { name: 'noodles', color: '#f5d36b', boil: ['raw', 'cooked'] },
+      veg: { name: 'vegetables', color: '#5fc96a', prep: 'board', boil: ['cut', 'cooked'] },
+      tofu: { name: 'tofu', color: '#fff4dc', prep: 'board', boil: ['cut', 'cooked'], fry: ['cut', 'fried'] },
+      fish: { name: 'fish', color: '#4f90e8', prep: 'board', boil: ['cut', 'cooked'] },
+      squid: { name: 'squid', color: '#f7a6c0', prep: 'board', fry: ['cut', 'fried'] },
+      shrimp: { name: 'shrimp', color: '#ff8a3d', prep: 'board', boil: ['cut', 'cooked'] },
+      crab: { name: 'crab', color: '#e8382c', prep: 'board', boil: ['cut', 'cooked'] },
+      chili: { name: 'chili', color: '#d8231c', prep: 'board', boil: ['cut', 'cooked'] },
+      citrus: { name: 'lime', color: '#8fd14f', prep: 'board' },
+      peanut: { name: 'peanut sauce', color: '#8d5a2b' },
+    };
+    const CRATE = { r: 'rice', n: 'noodles', v: 'veg', t: 'tofu', f: 'fish', q: 'squid', s: 'shrimp', k: 'crab', c: 'chili', l: 'citrus', p: 'peanut' };
+    // What a prepared state is called on the cards, and the glyph for the step.
+    const STATE_GLYPH = { raw: '', cut: '✂', rinsed: '≈', cooked: '♨', fried: '✦' };
+    const STATE_WORD = { cut: 'chopped', rinsed: 'rinsed', cooked: 'boiled', fried: 'fried', raw: '' };
+
+    // Recipes: parts are "ingredient:state"; `spicy` allows a Pedas variant with an
+    // extra chopped chili, `extra` the Es Jeruk Extra Citrus one. `life` is the
+    // order's patience in seconds (before the chef-count scaling).
+    const RECIPES = {
+      gado: { name: 'Gado-Gado', container: 'bowl', parts: ['veg:cut', 'tofu:cooked', 'peanut:raw'], life: 70, spicy: true },
+      liwet: { name: 'Nasi Liwet', container: 'bowl', parts: ['rice:cooked', 'veg:cut', 'chili:cut'], life: 78, spicy: true },
+      tahu: { name: 'Tahu Goreng Sambal', container: 'plate', parts: ['tofu:fried', 'chili:cut'], life: 60, spicy: true },
+      ikan: { name: 'Ikan Bakar Bowl', container: 'bowl', parts: ['fish:cooked', 'rice:cooked', 'citrus:cut'], life: 84, spicy: true },
+      cumi: { name: 'Cumi Goreng Tepung', container: 'plate', parts: ['squid:fried', 'chili:cut'], life: 60, spicy: true },
+      udang: { name: 'Udang Saus Padang', container: 'bowl', parts: ['shrimp:cooked', 'chili:cooked', 'veg:cooked'], life: 78 },
+      bakmi: { name: 'Bakmi Kepiting', container: 'bowl', parts: ['noodles:cooked', 'crab:cooked', 'veg:cut'], life: 78 },
+      selade: { name: 'Selade Pontianak', container: 'plate', parts: ['veg:cut', 'tofu:fried', 'peanut:raw'], life: 66 },
+      jeruk: { name: 'Es Jeruk Nipis', container: 'glass', parts: ['citrus:cut', 'citrus:cut'], life: 50, extra: true },
+    };
+    const DISH_NODE = { gado: 'd_gado', liwet: 'd_liwet', tahu: 'd_tahu', ikan: 'd_ikan', cumi: 'd_cumi', udang: 'd_udang', bakmi: 'd_bakmi', selade: 'd_selade', jeruk: 'd_jeruk' };
+
+    // Orders per chef count: seconds between new orders at the start (the gap
+    // shrinks by a quarter over the shift), how many can wait at once, and how
+    // much more patient they are with a small team.
+    const PACE = [
+      { gap: 26, max: 3, patience: 1.3 },
+      { gap: 20, max: 4, patience: 1.1 },
+      { gap: 16, max: 5, patience: 1.0 },
+      { gap: 13, max: 5, patience: 1.0 },
     ];
-    const ROWS = MAP.length, COLS = MAP[0].length;
-    const TOP = 0.55;            // counter height
-    const ROOM_TIME = 30, SHIFT = 180, COOK = 9, BURN = 9, MAX_CHEFS = 4;
-    const SPEED = 4.2, RADIUS = 0.3;
+    const paceFor = (n) => PACE[Math.max(0, Math.min(3, n - 1))];
+    // Three stars = what a team of n should manage in a shift (first guesses, not playtested).
+    const par = (n) => (6 + 3 * (Math.max(1, n) - 1)) * 26;
+
+    const sortedKey = (parts) => [...parts].sort().join(',');
+    const RECIPE_KEYS = {};
+    for (const [id, r] of Object.entries(RECIPES)) {
+      RECIPE_KEYS[sortedKey(r.parts)] = { id, variant: null };
+      if (r.spicy) RECIPE_KEYS[sortedKey([...r.parts, 'chili:cut'])] = { id, variant: 'pedas' };
+      if (r.extra) RECIPE_KEYS[sortedKey([...r.parts, 'citrus:cut'])] = { id, variant: 'extra' };
+    }
+    const matchRecipe = (plate) => RECIPE_KEYS[sortedKey(plate.parts)] || null;
+    const recipeName = (id, variant) => RECIPES[id].name + (variant === 'pedas' ? ' Pedas' : variant === 'extra' ? ' Extra Citrus' : '');
+    const partsOf = (id, variant) => [...RECIPES[id].parts, ...(variant === 'pedas' ? ['chili:cut'] : variant === 'extra' ? ['citrus:cut'] : [])];
+
+    // ---------------- the kitchen ----------------
+    let mapId = (new URLSearchParams(location.search).get('map') || MAP_IDS[0]) in K ? new URLSearchParams(location.search).get('map') || MAP_IDS[0] : MAP_IDS[0];
+    let kit = null;            // the current kitchen definition
+    let MAP, ROWS, COLS, tiles;
     const tileX = (c) => c - (COLS - 1) / 2;
     const tileZ = (r) => r - (ROWS - 1) / 2;
     const toC = (x) => Math.round(x + (COLS - 1) / 2);
     const toR = (z) => Math.round(z + (ROWS - 1) / 2);
+    const tileAt = (c, r) => (r >= 0 && r < ROWS && c >= 0 && c < COLS ? tiles[r][c] : null);
+    const walkable = (ch) => ch === '.' || ch === '=';
 
-    const RECIPES = {
-      tomato_soup: { name: 'Tomato Soup', icons: ['tomato', 'tomato', 'tomato'], color: '#ff6b4a', ok: (p) => p.soup === 'tomato' },
-      onion_soup: { name: 'Onion Soup', icons: ['onion', 'onion', 'onion'], color: '#f5c26b', ok: (p) => p.soup === 'onion' },
-      salad: {
-        name: 'Salad', icons: ['lettuce', 'tomato'], color: '#55d17a',
-        ok: (p) => !p.soup && p.contents.length === 2 && p.contents.includes('lettuce') && p.contents.includes('tomato'),
-      },
-    };
-    const ING_COLOR = { tomato: '#ff3b30', lettuce: '#2ecc71', onion: '#e8a94a' };
-    const SOUP_COLOR = { tomato: '#ff6b4a', onion: '#f5c26b', mixed: '#a0785a', burnt: '#2b2b2b' };
-    const CRATE = { T: 'tomato', L: 'lettuce', O: 'onion' };
-
-    // ---------------- state ----------------
-    let tiles, chefs, orders, phase, phaseT, roomT, score, served, failed, nextOrderT, shiftT;
+    let chefs, orders, phase, phaseT, roomT, score, served, failed, combo, bestCombo, nextOrderT, shiftT, platesOut, plateReturns, orderCount;
     const votes = new Set();
     const popups = [];
+    const bell = [];           // serving animation: plates sliding away
     let uid = 1;
+    let lastT = performance.now();
+
+    function newItem(type, state = 'raw') { return { id: uid++, type, state, parts: [] }; }
+    const isPlate = (it) => it && it.type === 'plate';
+    const partKey = (it) => `${it.type}:${it.state}`;
+
+    function loadKitchen(id) {
+      mapId = id;
+      kit = K[id];
+      MAP = kit.map;
+      ROWS = MAP.length;
+      COLS = MAP[0].length;
+      resetKitchen();
+    }
 
     function resetKitchen() {
       tiles = MAP.map((row, r) => [...row].map((ch, c) => ({
-        ch, r, c, solid: ch !== '.', item: null, chop: 0,
-        pot: ch === 'S' ? { items: [], t: 0, state: 'empty' } : null,
+        ch, r, c, solid: !walkable(ch), item: null, work: 0,
+        pot: ch === 'C' ? { items: [], t: 0, state: 'empty' } : null,          // state: empty | cooking | done | burnt
+        fryer: ch === 'F' ? { item: null, t: 0, state: 'empty' } : null,
       })));
       orders = [];
-      score = 0; served = 0; failed = 0;
+      score = 0; served = 0; failed = 0; combo = 0; bestCombo = 0; orderCount = 0;
+      platesOut = 0; plateReturns = [];
       nextOrderT = 2;
-      for (const ch of chefs.values()) ch.hold = null;
+      if (chefs) for (const ch of chefs.values()) { ch.hold = null; ch.working = 0; }
     }
-
-    const tileAt = (c, r) => (r >= 0 && r < ROWS && c >= 0 && c < COLS ? tiles[r][c] : null);
-    const newItem = (type, extra = {}) => ({ id: uid++, type, chopped: false, contents: [], soup: null, ...extra });
 
     // ---------------- chefs ----------------
     chefs = new Map(); // player id -> chef
-    const SPAWNS = [[3, 5], [8, 5], [3, 2], [8, 2]];
+
+    function spawnOf(i) {
+      const s = kit.spawns[i % kit.spawns.length];
+      return [tileX(s[0]), tileZ(s[1])];
+    }
 
     function addChef(p) {
       if (chefs.has(p.id) || chefs.size >= MAX_CHEFS) return;
       const used = new Set([...chefs.values()].map((c) => c.spawn));
       const spawn = [0, 1, 2, 3].find((i) => !used.has(i));
-      const [c, r] = SPAWNS[spawn];
+      const [x, z] = spawnOf(spawn);
       chefs.set(p.id, {
-        id: p.id, spawn, x: tileX(c), z: tileZ(r), fx: 0, fz: 1, vx: 0, vz: 0, dash: 0, dashCd: 0,
-        hold: null, chopping: 0, walk: 0, moving: 0, color: p.color, name: p.name,
+        id: p.id, spawn, slot: p.slot, x, z, fx: 0, fz: 1, vx: 0, vz: 0, dash: 0, dashCd: 0,
+        hold: null, working: 0, workKind: '', color: p.color, name: p.name, bump: 0,
       });
       buildChef3D(p.id);
     }
@@ -93,8 +169,14 @@ MabarGames.register({
       if (!ch) return;
       chefs.delete(id);
       const o = chefObjs.get(id);
-      if (o && scene) scene.remove(o.root);
+      if (o) { if (o.ch) o.ch.dispose(); if (scene) scene.remove(o.root); }
       chefObjs.delete(id);
+      const hl = highlights.get(id);
+      if (hl && scene) scene.remove(hl);
+      highlights.delete(id);
+    }
+    function respawnChefs() {
+      for (const ch of chefs.values()) { const [x, z] = spawnOf(ch.spawn); ch.x = x; ch.z = z; ch.fx = 0; ch.fz = 1; ch.hold = null; ch.working = 0; }
     }
 
     // What the chef is facing: the best solid tile in front of them.
@@ -103,7 +185,7 @@ MabarGames.register({
       let best = null, bestScore = 0.35;
       for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
         const t = tileAt(c0 + dc, r0 + dr);
-        if (!t || !t.solid) continue;
+        if (!t || !t.solid || t.ch === '~') continue;
         const dx = tileX(t.c) - ch.x, dz = tileZ(t.r) - ch.z;
         const d = Math.hypot(dx, dz);
         if (d > 1.25) continue;
@@ -115,120 +197,227 @@ MabarGames.register({
 
     // ---------------- interactions ----------------
     function say(text, x, z, color = '#ffffff') { popups.push({ text, x, z, color, t: 0 }); }
+    const rumble = (ch, ms) => hub.rumble(hub.players.get(ch.id), ms);
+
+    // Can this part go onto a plate, and if not, why?
+    function plateable(it) {
+      const d = ING[it.type];
+      if (!d) return 'That does not go on a plate';
+      if (it.state === 'raw' && d.prep === 'board') return `Chop the ${d.name} first`;
+      if (it.state === 'raw' && d.prep === 'sink') return `Rinse the ${d.name} first`;
+      if (it.type === 'rice' && it.state === 'rinsed') return 'Boil the rice first';
+      if (it.type === 'noodles' && it.state === 'raw') return 'Boil the noodles first';
+      return null;
+    }
+
+    function addToPlate(plate, it, X, Z) {
+      const why = plateable(it);
+      if (why) { say(why, X, Z, '#ffd32a'); return false; }
+      if (plate.parts.length >= PLATE_MAX) { say('Plate is full', X, Z, '#ffd32a'); return false; }
+      plate.parts.push(partKey(it));
+      return true;
+    }
+
+    // A pot takes an ingredient in its boil state; a fryer in its fry state.
+    function potAccepts(it) {
+      const d = ING[it.type];
+      if (!d || !d.boil) return `${d ? d.name[0].toUpperCase() + d.name.slice(1) : 'That'} is not boiled`;
+      if (it.state === d.boil[0]) return null;
+      if (it.state === 'raw' && d.prep === 'board') return `Chop the ${d.name} first`;
+      if (it.state === 'raw' && d.prep === 'sink') return `Rinse the ${d.name} first`;
+      return 'Already cooked';
+    }
+    function fryerAccepts(it) {
+      const d = ING[it.type];
+      if (!d || !d.fry) return `${d ? d.name[0].toUpperCase() + d.name.slice(1) : 'That'} is not fried`;
+      if (it.state === d.fry[0]) return null;
+      if (it.state === 'raw') return `Chop the ${d.name} first`;
+      return 'Already cooked';
+    }
 
     function interact(ch) {
       const t = targetOf(ch);
       if (!t) return;
       const h = ch.hold;
       const X = tileX(t.c), Z = tileZ(t.r);
+      if (CRATE[t.ch]) {
+        if (!h) { ch.hold = newItem(CRATE[t.ch]); rumble(ch, 12); }
+        else if (!t.item) { t.item = h; ch.hold = null; }           // a crate's rim holds one thing too
+        else if (isPlate(h) && !isPlate(t.item)) { if (addToPlate(h, t.item, X, Z)) t.item = null; }
+        return;
+      }
       switch (t.ch) {
-        case 'T': case 'L': case 'O':
-          if (!h && !t.item) { ch.hold = newItem(CRATE[t.ch]); return; }
-          break;
-        case 'P':
-          if (!h) { ch.hold = newItem('plate'); return; }
-          if (h.type === 'plate' && !h.soup && !h.contents.length) { ch.hold = null; return; } // put a clean plate back
-          if (h.type !== 'plate') {               // drop a chopped ingredient onto a fresh plate
-            const pl = newItem('plate');
-            if (addToPlate(pl, h, X, Z)) ch.hold = pl;
+        case 'P': {
+          if (!h) {
+            if (platesOut >= PLATES) { say('No clean plates yet', X, Z, '#ffd32a'); return; }
+            platesOut++;
+            ch.hold = newItem('plate');
+            rumble(ch, 12);
+          } else if (isPlate(h) && !h.parts.length) { platesOut--; ch.hold = null; }   // a clean plate back on the stack
+          else if (!isPlate(h)) {
+            if (platesOut >= PLATES) { say('No clean plates yet', X, Z, '#ffd32a'); return; }
+            const pl = newItem('plate');                              // straight onto a fresh plate
+            if (addToPlate(pl, h, X, Z)) { platesOut++; ch.hold = pl; }
           }
           return;
+        }
         case 'X':
           if (h) {
-            if (h.type === 'plate') { h.contents = []; h.soup = null; } else ch.hold = null;
-            say('Binned', X, Z, '#adb5bd');
+            if (isPlate(h)) { if (h.parts.length) { h.parts = []; say('Scraped the plate', X, Z, '#adb5bd'); } }
+            else { ch.hold = null; say('Binned', X, Z, '#adb5bd'); }
           }
           return;
         case 'W':
-          if (h && h.type === 'plate') { deliver(ch, h, X, Z); return; }
-          if (h) { say('Plate it first!', X, Z, '#ffd32a'); return; }
+          if (isPlate(h)) deliver(ch, h, X, Z);
+          else if (h) say('Plate it first!', X, Z, '#ffd32a');
           return;
-        case 'S': {
+        case 'C': {
           const pot = t.pot;
           if (!h) {
-            if (pot.state === 'burnt') { pot.items = []; pot.t = 0; pot.state = 'empty'; say('Scraped', X, Z, '#adb5bd'); }
+            if (pot.state === 'burnt') say('Hold X to scrape it', X, Z, '#ffd32a');
             else if (pot.state === 'done') say('Grab a plate', X, Z, '#ffd32a');
             return;
           }
-          if (h.type === 'plate') {
-            if (pot.state === 'done' && !h.soup && !h.contents.length) {
-              h.soup = pot.type;
+          if (isPlate(h)) {
+            if (pot.state === 'done') {
+              if (h.parts.length + pot.items.length > PLATE_MAX) { say('Plate is full', X, Z, '#ffd32a'); return; }
+              for (const it of pot.items) h.parts.push(`${it.type}:${ING[it.type].boil[1]}`);
               pot.items = []; pot.t = 0; pot.state = 'empty';
-              hub.rumble(hub.players.get(ch.id), 20);
-            } else if (pot.state !== 'done') say(pot.items.length ? 'Still cooking' : 'Pot is empty', X, Z, '#ffd32a');
+              rumble(ch, 25);
+            } else if (pot.state === 'burnt') say('Burnt! Hold X to scrape it', X, Z, '#ff6b6b');
+            else say(pot.items.length ? 'Still cooking' : 'Pot is empty', X, Z, '#ffd32a');
             return;
           }
-          if (h.type === 'lettuce') { say('No lettuce soup!', X, Z, '#ffd32a'); return; }
-          if (!h.chopped) { say('Chop it first', X, Z, '#ffd32a'); return; }
-          if (pot.items.length >= 3 || pot.state === 'done' || pot.state === 'burnt') { say('Pot is full', X, Z, '#ffd32a'); return; }
-          pot.items.push(h.type);
+          const why = potAccepts(h);
+          if (why) { say(why, X, Z, '#ffd32a'); return; }
+          if (pot.state === 'burnt') { say('Scrape the pot first', X, Z, '#ffd32a'); return; }
+          if (pot.state === 'done') { say('Plate it before adding more', X, Z, '#ffd32a'); return; }
+          if (pot.items.length >= POT_MAX) { say('Pot is full', X, Z, '#ffd32a'); return; }
+          pot.items.push(h);
           ch.hold = null;
-          if (pot.items.length === 3) {
-            pot.state = 'cooking';
-            pot.t = 0;
-            pot.type = pot.items.every((i) => i === pot.items[0]) ? pot.items[0] : 'mixed';
-          } else pot.state = 'filling';
+          pot.state = 'cooking';
+          pot.t = pot.items.length === 1 ? 0 : Math.max(0, pot.t - BOIL * 0.4);   // a late addition needs a little longer
+          rumble(ch, 15);
+          return;
+        }
+        case 'F': {
+          const fr = t.fryer;
+          if (!h) {
+            if (fr.state === 'done') { ch.hold = fr.item; ch.hold.state = ING[fr.item.type].fry[1]; fr.item = null; fr.state = 'empty'; fr.t = 0; rumble(ch, 15); }
+            else if (fr.state === 'burnt') say('Hold X to scrape it', X, Z, '#ffd32a');
+            else if (fr.state === 'cooking') say('Still frying', X, Z, '#ffd32a');
+            return;
+          }
+          if (isPlate(h)) {
+            if (fr.state === 'done') {
+              const it = fr.item;
+              it.state = ING[it.type].fry[1];
+              if (addToPlate(h, it, X, Z)) { fr.item = null; fr.state = 'empty'; fr.t = 0; rumble(ch, 25); }
+            } else if (fr.state === 'burnt') say('Burnt! Hold X to scrape it', X, Z, '#ff6b6b');
+            else say(fr.item ? 'Still frying' : 'Fryer is empty', X, Z, '#ffd32a');
+            return;
+          }
+          const why = fryerAccepts(h);
+          if (why) { say(why, X, Z, '#ffd32a'); return; }
+          if (fr.state !== 'empty') { say(fr.state === 'burnt' ? 'Scrape the fryer first' : 'Fryer is busy', X, Z, '#ffd32a'); return; }
+          fr.item = h; ch.hold = null; fr.state = 'cooking'; fr.t = 0;
+          rumble(ch, 15);
           return;
         }
         default: break;
       }
-      // Generic surfaces: counters, boards, crate tops
-      if (!h && t.item) { ch.hold = t.item; t.item = null; t.chop = 0; return; }
+      // Counters, boards, the sink: one item each; plates combine with what is there.
+      if (!h && t.item) { ch.hold = t.item; t.item = null; t.work = 0; return; }
       if (h && !t.item) {
-        if (t.ch === 'C' && h.type === 'plate') { say('Plates go on counters', X, Z, '#ffd32a'); return; }
-        t.item = h; ch.hold = null; return;
+        if ((t.ch === 'B' || t.ch === 'S') && isPlate(h)) { say('Plates go on counters', X, Z, '#ffd32a'); return; }
+        if (t.ch === 'S' && !(h.type === 'rice' && h.state === 'raw')) { say('Only rice gets rinsed', X, Z, '#ffd32a'); return; }
+        t.item = h; ch.hold = null; t.work = 0; return;
       }
       if (h && t.item) {
-        // combine onto a plate (either the held one or the one on the counter)
-        const plate = h.type === 'plate' ? h : t.item.type === 'plate' ? t.item : null;
-        const ing = h.type === 'plate' ? t.item : h;
-        if (plate && ing && ing.type !== 'plate' && addToPlate(plate, ing, X, Z)) {
-          if (ing === h) ch.hold = null; else { t.item = null; t.chop = 0; }
-        }
+        const plate = isPlate(h) ? h : isPlate(t.item) ? t.item : null;
+        const ing = isPlate(h) ? t.item : h;
+        if (plate && ing && !isPlate(ing) && addToPlate(plate, ing, X, Z)) {
+          if (ing === h) ch.hold = null; else { t.item = null; t.work = 0; }
+          rumble(ch, 12);
+        } else if (isPlate(h) && isPlate(t.item)) say('Counter is taken', X, Z, '#ffd32a');
       }
     }
 
-    function addToPlate(plate, ing, X, Z) {
-      if (plate.soup) { say('Plate is full', X, Z, '#ffd32a'); return false; }
-      if (!ing.chopped) { say('Chop it first', X, Z, '#ffd32a'); return false; }
-      if (ing.type === 'onion') { say('Onions go in soup', X, Z, '#ffd32a'); return false; }
-      if (plate.contents.includes(ing.type)) { say('Already has that', X, Z, '#ffd32a'); return false; }
-      plate.contents.push(ing.type);
-      return true;
-    }
-
-    function chop(ch, amount) {
+    // Holding X: chop at a board, rinse at the sink, scrape a burnt pot or fryer.
+    function work(ch, amount) {
       const t = targetOf(ch);
-      if (!t || t.ch !== 'C' || !t.item || t.item.type === 'plate' || t.item.chopped) return false;
-      t.chop += amount;
-      ch.chopping = 0.25;
-      if (t.chop >= 1) {
-        t.item.chopped = true;
-        t.chop = 0;
-        hub.rumble(hub.players.get(ch.id), 25);
+      if (!t) return false;
+      let kind = '';
+      if (t.ch === 'B' && t.item && !isPlate(t.item) && t.item.state === 'raw' && ING[t.item.type].prep === 'board') kind = 'chop';
+      else if (t.ch === 'S' && t.item && t.item.type === 'rice' && t.item.state === 'raw') kind = 'rinse';
+      else if (t.ch === 'C' && t.pot.state === 'burnt') kind = 'scrape';
+      else if (t.ch === 'F' && t.fryer.state === 'burnt') kind = 'scrape';
+      if (!kind || ch.hold) return false;
+      const need = kind === 'chop' ? CHOP : kind === 'rinse' ? RINSE : SCRAPE;
+      t.work += amount / need;
+      ch.working = 0.25;
+      ch.workKind = kind;
+      if (t.work >= 1) {
+        t.work = 0;
+        if (kind === 'chop') t.item.state = 'cut';
+        else if (kind === 'rinse') t.item.state = 'rinsed';
+        else if (t.ch === 'C') { t.pot.items = []; t.pot.t = 0; t.pot.state = 'empty'; say('Scraped', tileX(t.c), tileZ(t.r), '#adb5bd'); }
+        else { t.fryer.item = null; t.fryer.t = 0; t.fryer.state = 'empty'; say('Scraped', tileX(t.c), tileZ(t.r), '#adb5bd'); }
+        rumble(ch, 30);
       }
       return true;
     }
 
     function deliver(ch, plate, X, Z) {
       if (phase !== 'play') { say('Kitchen not open yet', X, Z, '#ffd32a'); return; }
-      const i = orders.findIndex((o) => RECIPES[o.key].ok(plate));
-      if (i < 0) { say(plate.soup || plate.contents.length ? 'Nobody ordered that!' : 'Empty plate!', X, Z, '#ff6b6b'); return; }
+      const m = matchRecipe(plate);
+      const i = m ? orders.findIndex((o) => o.id === m.id && o.variant === m.variant) : -1;
+      if (i < 0) {
+        if (!plate.parts.length) say('Empty plate!', X, Z, '#ff6b6b');
+        else if (m) say(`Nobody ordered ${recipeName(m.id, m.variant)}`, X, Z, '#ff6b6b');
+        else say('That is not a dish', X, Z, '#ff6b6b');
+        return;
+      }
       const o = orders[i];
-      const tip = Math.round(8 * (1 - o.t / o.life));
-      score += 20 + tip;
+      const tip = Math.round(12 * (1 - o.t / o.life));
+      combo++;
+      bestCombo = Math.max(bestCombo, combo);
+      const bonus = combo >= 5 ? 10 : combo >= 3 ? 5 : 0;
+      score += 20 + tip + bonus;
       served++;
       orders.splice(i, 1);
       ch.hold = null;
-      say(`+${20 + tip}`, X, Z, '#2ed573');
+      platesOut--;
+      plateReturns.push(PLATE_RETURN);
+      bell.push({ x: X, z: Z, t: 0, recipe: m.id, variant: m.variant });
+      say(`+${20 + tip + bonus}${bonus ? ` · combo ×${combo}` : ''}`, X, Z, '#2ed573');
       for (const p of hub.players.values()) hub.rumble(p, 50);
     }
 
     // ---------------- orders ----------------
-    function addOrder() {
-      const keys = Object.keys(RECIPES);
-      const key = keys[Math.floor(Math.random() * keys.length)];
-      orders.push({ id: uid++, key, t: 0, life: 70 + Math.random() * 15, born: performance.now() });
+    // Easy recipes first; three-part dishes from 40 s, variants from 90 s; never
+    // three of the same in a row; the gap shrinks as the shift goes on.
+    function pickOrder() {
+      const pool = kit.recipes.slice();
+      const weights = pool.map((id) => {
+        const r = RECIPES[id];
+        if (r.parts.length >= 3 && shiftT < 40) return 0.15;
+        return 1;
+      });
+      const last = orders.slice(-2).map((o) => o.id);
+      if (last.length === 2 && last[0] === last[1]) weights[pool.indexOf(last[0])] = 0;
+      let total = weights.reduce((a, b) => a + b, 0), x = Math.random() * total, id = pool[0];
+      for (let i = 0; i < pool.length; i++) { x -= weights[i]; if (x <= 0) { id = pool[i]; break; } }
+      const r = RECIPES[id];
+      let variant = null;
+      if (shiftT > 90 && Math.random() < 0.28) variant = r.spicy ? 'pedas' : r.extra ? 'extra' : null;
+      return { id, variant };
+    }
+    function addOrder(forced) {
+      const { id, variant } = forced || pickOrder();
+      const life = RECIPES[id].life * paceFor(chefs.size).patience * (variant ? 1.1 : 1);
+      orders.push({ uid: uid++, id, variant, t: 0, life, parts: partsOf(id, variant), born: performance.now() });
+      orderCount++;
     }
 
     // ---------------- phases ----------------
@@ -237,66 +426,167 @@ MabarGames.register({
       roomT = ROOM_TIME;
       votes.clear();
       resetKitchen();
+      respawnChefs();
       hub.showLobby(false, false);
     }
     function startShift() {
       resetKitchen();
+      respawnChefs();
       phase = 'countdown';
-      phaseT = 3;
+      phaseT = COUNTDOWN;
       votes.clear();
       for (const p of hub.players.values()) hub.rumble(p, 40);
     }
-
-    // ---------------- 3D ----------------
-    let renderer = null, scene = null, camera = null, kit = null, chefTpl = null, loadErr = null, loadP = 0, stopped = false;
-    const chefObjs = new Map();
-    const itemObjs = new Map(); // item id -> { key, obj, seen }
-    const potObjs = [];         // { tile, soup }
-    const highlights = new Map();
-    let lastT = performance.now();
-
-    function tpl(name) {
-      const o = kit.scene.getObjectByName(name);
-      return o ? o.clone(true) : new THREE.Group();
+    function stars() {
+      const p = par(Math.max(1, chefs.size));
+      return score >= p ? 3 : score >= p * 0.65 ? 2 : score >= p * 0.35 ? 1 : 0;
+    }
+    function endShift() {
+      phase = 'over';
+      phaseT = RESULTS;
+      const s = stars();
+      for (const o of chefObjs.values()) if (o.ch) o.ch.play(s >= 2 ? 'victory' : 'defeat');
+      for (const p of hub.players.values()) hub.rumble(p, s >= 2 ? 120 : 60);
     }
 
-    function setup(k, chars) {
-      kit = k;
-      chefTpl = chars.scene.getObjectByName('ch_chef');
+    // ---------------- 3D ----------------
+    let renderer = null, scene = null, camera = null, kitAsset = null, chars = null, env = null, fx = null;
+    let loadErr = null, loadP = 0, stopped = false, envRoot = null;
+    const chefObjs = new Map();   // id -> { root, ch (animal) | parts (chibi) }
+    const itemObjs = new Map();   // item id -> { key, obj, seen }
+    const stationObjs = [];       // everything placed for the current map (to clear on a map change)
+    const potObjs = new Map();    // tile -> { soup, lid, steam[], smoke }
+    const fryerObjs = new Map();  // tile -> { oil, basket, smoke }
+    const sinkObjs = new Map();   // tile -> { water, splash }
+    const boardObjs = new Map();  // tile -> { knife }
+    const highlights = new Map();
+    let sceneMap = null;          // which map the stations in the scene belong to
+
+    function tpl(name) {
+      const o = kitAsset && kitAsset.scene.getObjectByName(name);
+      return o ? o.clone(true) : new THREE.Group();
+    }
+    // A template's animated child (lid, basket, oil, knife...): the optimized .glb
+    // keeps a quantization scale and offset in these nodes, so the game only ever
+    // adds to what is there. Returns { o, pos, scale } or null.
+    function part(root, name) {
+      const o = root.getObjectByName(name);
+      return o ? { o, pos: o.position.clone(), scale: o.scale.clone() } : null;
+    }
+
+    function setup() {
       renderer = Kit3D.renderer(hub);
       scene = new THREE.Scene();
-      scene.background = new THREE.Color('#ffe6c7');
-      Kit3D.lights(scene, { size: 9, target: [0, 0, 0], sun: [5, 12, 6] });
-      scene.add(tpl('k_room'));
-      const KIND = { '#': 'k_counter', T: 'k_crate_tomato', L: 'k_crate_lettuce', O: 'k_crate_onion', C: 'k_board', S: 'k_stove', P: 'k_plates', W: 'k_serve', X: 'k_bin' };
-      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-        const ch = MAP[r][c];
-        if (ch === '.') continue;
-        const o = tpl(KIND[ch]);
-        o.position.set(tileX(c), 0, tileZ(r));
-        scene.add(o);
-        if (ch === 'S') {
-          const pot = tpl('k_pot');
-          pot.position.set(tileX(c), TOP + 0.02, tileZ(r));
-          const soup = pot.getObjectByName('k_pot_soup');
-          if (soup) soup.traverse((m) => { if (m.isMesh) m.material = m.material.clone(); });
-          scene.add(pot);
-          potObjs.push({ r, c, soup });
-        }
-      }
-      camera = new THREE.PerspectiveCamera(36, hub.W / hub.H, 0.1, 100);
-      placeCamera();
+      camera = new THREE.PerspectiveCamera(36, hub.W / hub.H, 0.1, 200);
+      buildMap3D();
       for (const id of chefs.keys()) buildChef3D(id);
     }
 
+    // Places the environment, stations and crates of the current map.
+    function buildMap3D() {
+      if (!scene) return;
+      for (const o of stationObjs) scene.remove(o);
+      stationObjs.length = 0;
+      potObjs.clear(); fryerObjs.clear(); sinkObjs.clear(); boardObjs.clear();
+      if (fx) { fx.dispose(); fx = null; }
+      if (envRoot) { scene.remove(envRoot); envRoot = null; }
+      for (const rec of itemObjs.values()) scene.remove(rec.obj);
+      itemObjs.clear();
+      scene.background = new THREE.Color(kit.sky || '#cfe9ff');
+      scene.fog = new THREE.Fog(kit.sky || '#cfe9ff', 28, 60);
+      for (const o of scene.children.filter((c) => c.isLight || c.name === 'lightTarget')) scene.remove(o);
+      const lights = Kit3D.lights(scene, { size: Math.max(COLS, ROWS) * 0.6, target: [0, 0, 0], sun: kit.sun || [6, 12, 5] });
+      lights.key.target.name = 'lightTarget';
+      if (env && env.scene) {
+        envRoot = env.scene;
+        scene.add(envRoot);
+        fx = Kit3D.liven(env);
+      } else {                                             // fallback: a flat floor in the map's shape
+        const g = new THREE.Group();
+        for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+          const ch = MAP[r][c];
+          const m = new THREE.Mesh(new THREE.BoxGeometry(1, 0.08, 1),
+            new THREE.MeshStandardMaterial({ color: ch === '~' ? '#4fb8ec' : (c + r) % 2 ? '#f0dcb8' : '#e6cfa6', roughness: 0.9 }));
+          m.position.set(tileX(c), ch === '~' ? -0.2 : -0.04, tileZ(r));
+          m.receiveShadow = true;
+          g.add(m);
+        }
+        envRoot = g;
+        scene.add(g);
+      }
+      const KIND = { '#': 'k_counter', B: 'k_board', S: 'k_sink', C: 'k_cooker', F: 'k_fryer', P: 'k_plates', W: 'k_serve', X: 'k_bin' };
+      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+        const ch = MAP[r][c];
+        const name = KIND[ch] || (CRATE[ch] ? 'k_crate' : null);
+        if (!name) continue;
+        const o = tpl(name);
+        o.position.set(tileX(c), 0, tileZ(r));
+        // stations face the nearest walkable side (their fronts have the slats / the tap)
+        const facing = ['.', '='].includes(MAP[r + 1] ? MAP[r + 1][c] : '~') ? 0 : ['.', '='].includes(MAP[r - 1] ? MAP[r - 1][c] : '~') ? Math.PI
+          : MAP[r][c - 1] && walkable(MAP[r][c - 1]) ? Math.PI / 2 : -Math.PI / 2;
+        o.rotation.y = facing;
+        scene.add(o);
+        stationObjs.push(o);
+        const t = tiles[r][c];
+        if (CRATE[ch]) {
+          const ing = CRATE[ch];
+          o.traverse((m) => { if (m.isMesh && m.material.name === 'label') { m.material = m.material.clone(); m.material.color.set(ING[ing].color); } });
+          for (const [dx, dz] of [[-0.18, -0.14], [0.17, -0.12], [-0.02, 0.17]]) {
+            const it = tpl(`i_${ing}`);
+            it.position.set(tileX(c) + dx, TOP + 0.2, tileZ(r) + dz);
+            it.scale.setScalar(0.8);
+            it.rotation.y = Math.random() * 6;
+            scene.add(it);
+            stationObjs.push(it);
+          }
+        } else if (ch === 'C') {
+          const pot = tpl('k_pot');
+          pot.position.set(tileX(c), TOP + 0.02, tileZ(r));
+          scene.add(pot);
+          stationObjs.push(pot);
+          const soup = part(pot, 'soup');
+          if (soup) soup.o.traverse((m) => { if (m.isMesh) m.material = m.material.clone(); });
+          const steam = [0, 1, 2].map((i) => { const s = tpl('fx_steam'); s.visible = false; scene.add(s); stationObjs.push(s); return { o: s, ph: i / 3 }; });
+          const smoke = tpl('fx_smoke'); smoke.visible = false; scene.add(smoke); stationObjs.push(smoke);
+          potObjs.set(t, { soup, lid: part(pot, 'lid'), steam, smoke, x: tileX(c), z: tileZ(r) });
+        } else if (ch === 'F') {
+          const smoke = tpl('fx_smoke'); smoke.visible = false; scene.add(smoke); stationObjs.push(smoke);
+          fryerObjs.set(t, { oil: part(o, 'oil'), basket: part(o, 'basket'), smoke, x: tileX(c), z: tileZ(r), facing });
+        } else if (ch === 'S') {
+          const splash = tpl('fx_splash'); splash.visible = false; scene.add(splash); stationObjs.push(splash);
+          sinkObjs.set(t, { water: part(o, 'water'), splash, x: tileX(c), z: tileZ(r) });
+        } else if (ch === 'B') {
+          boardObjs.set(t, { knife: part(o, 'knife') });
+        }
+      }
+      sceneMap = mapId;
+      placeCamera();
+    }
+
+    // The camera looks at the walkable part of the map from the near side, far
+    // enough back that all of it (and a chef's head) fits the screen.
     function placeCamera() {
       if (!camera) return;
-      const a = hub.W / hub.H;
-      const far = a < 1.3 ? 1.45 : 1;
-      camera.aspect = a;
-      camera.position.set(0, 11.5 * far, 8.2 * far);
-      camera.lookAt(0, 0, 0.55);
+      let c0 = COLS, c1 = -1, r0 = ROWS, r1 = -1;
+      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (MAP[r][c] !== '~') { c0 = Math.min(c0, c); c1 = Math.max(c1, c); r0 = Math.min(r0, r); r1 = Math.max(r1, r); }
+      const cx = (tileX(c0) + tileX(c1)) / 2, cz = (tileZ(r0) + tileZ(r1)) / 2;
+      const w = c1 - c0 + 2.2, d = r1 - r0 + 2.2;
+      camera.aspect = hub.W / hub.H;
       camera.updateProjectionMatrix();
+      const pitch = 0.95;                                  // radians below horizontal
+      let dist = 10;
+      const corners = [];
+      for (const x of [cx - w / 2, cx + w / 2]) for (const z of [cz - d / 2, cz + d / 2]) for (const y of [0, 1.8]) corners.push(new THREE.Vector3(x, y, z));
+      for (let i = 0; i < 4; i++) {
+        camera.position.set(cx, dist * Math.sin(pitch), cz + 0.9 + dist * Math.cos(pitch));
+        camera.lookAt(cx, 0.4, cz + 0.9);
+        camera.updateMatrixWorld();
+        let worst = 0;
+        for (const p of corners) { const v = p.clone().project(camera); worst = Math.max(worst, Math.abs(v.x) / 0.95, Math.abs(v.y) / 0.84); }
+        dist *= worst;
+      }
+      camera.position.set(cx, dist * Math.sin(pitch), cz + 0.9 + dist * Math.cos(pitch));
+      camera.lookAt(cx, 0.4, cz + 0.9);
     }
 
     function nameSprite(text, color) {
@@ -317,56 +607,83 @@ MabarGames.register({
       return sp;
     }
 
+    const animalFor = (ch) => (window.MabarChars && MabarChars.ready(ANIMALS[ch.slot % ANIMALS.length]) ? ANIMALS[ch.slot % ANIMALS.length]
+      : window.MabarChars ? ANIMALS.find((id) => MabarChars.ready(id)) || null : null);
+
     function buildChef3D(id) {
-      if (!scene || !chefTpl) return;
+      if (!scene) return;
       const ch = chefs.get(id);
       if (!ch || chefObjs.has(id)) return;
-      const root = chefTpl.clone(true);
-      const color = new THREE.Color(ch.color);
-      root.traverse((o) => {
-        if (!o.isMesh) return;
-        if (o.material.name === 'accent' || o.material.name === 'hair') {
-          o.material = o.material.clone();
-          o.material.color.copy(o.material.name === 'hair' ? new THREE.Color(['#4a2c1d', '#2b1d16', '#7a4a2a', '#c58b4a'][ch.spawn]) : color);
-        }
-      });
-      root.scale.setScalar(2.4);
-      const tag = nameSprite(ch.name, ch.color);
-      tag.position.y = 0.8;
-      tag.scale.multiplyScalar(1 / 2.4);
-      root.add(tag);
+      const animal = animalFor(ch);
+      let root, rec;
+      if (animal) {
+        const a = MabarChars.create(animal, { scale: CHAR_SCALE, tool: null });   // a plain avatar: no racket
+        root = a.root;
+        rec = { root, ch: a };
+        const ring = new THREE.Mesh(new THREE.RingGeometry(0.24, 0.31, 40), new THREE.MeshBasicMaterial({ color: ch.color, transparent: true, opacity: 0.85, depthWrite: false }));
+        ring.rotation.x = -Math.PI / 2; ring.position.y = 0.03; ring.renderOrder = 1;
+        ring.scale.setScalar(1 / CHAR_SCALE);
+        root.add(ring);
+        const tag = nameSprite(ch.name, ch.color);
+        tag.position.y = 1.0 + 0.12 / CHAR_SCALE;
+        tag.scale.multiplyScalar(1 / CHAR_SCALE);
+        root.add(tag);
+      } else {
+        const tplChef = chars && chars.scene.getObjectByName('ch_chef');
+        root = tplChef ? tplChef.clone(true) : new THREE.Group();
+        const color = new THREE.Color(ch.color);
+        root.traverse((o) => {
+          if (!o.isMesh) return;
+          if (o.material.name === 'accent' || o.material.name === 'hair') {
+            o.material = o.material.clone();
+            o.material.color.copy(o.material.name === 'hair' ? new THREE.Color(['#4a2c1d', '#2b1d16', '#7a4a2a', '#c58b4a'][ch.spawn]) : color);
+          }
+        });
+        root.scale.setScalar(2.4);
+        const tag = nameSprite(ch.name, ch.color);
+        tag.position.y = 0.8;
+        tag.scale.multiplyScalar(1 / 2.4);
+        root.add(tag);
+        const part = (s) => root.getObjectByName(`ch_chef_${s}`);
+        rec = { root, armR: part('armR'), armL: part('armL'), legL: part('legL'), legR: part('legR'), walk: 0 };
+      }
       scene.add(root);
-      const part = (s) => root.getObjectByName(`ch_chef_${s}`);
-      chefObjs.set(id, { root, armR: part('armR'), armL: part('armL'), legL: part('legL'), legR: part('legR') });
-      const hl = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.04, 1.0), new THREE.MeshBasicMaterial({
-        color: ch.color, transparent: true, opacity: 0.35, depthWrite: false,
-      }));
+      chefObjs.set(id, rec);
+      const hl = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.04, 1.0), new THREE.MeshBasicMaterial({ color: ch.color, transparent: true, opacity: 0.35, depthWrite: false }));
       hl.visible = false;
       scene.add(hl);
       highlights.set(id, hl);
     }
 
     function itemKey(it) {
-      if (it.type === 'plate') return `plate:${it.soup || ''}:${[...it.contents].sort().join(',')}`;
-      return `${it.type}:${it.chopped ? 1 : 0}`;
+      if (isPlate(it)) return `plate:${[...it.parts].sort().join(',')}`;
+      return partKey(it);
     }
 
     function buildItem(it) {
-      if (it.type !== 'plate') return tpl(`i_${it.type}${it.chopped ? '_cut' : ''}`);
-      const g = new THREE.Group();
-      g.add(tpl('i_plate'));
-      if (it.soup) {
-        const s = tpl('i_soup');
-        s.position.y = 0.02;
-        s.traverse((m) => {
-          if (m.isMesh && m.material.name === 'soup') { m.material = m.material.clone(); m.material.color.set(SOUP_COLOR[it.soup] || '#999'); }
-        });
-        g.add(s);
+      if (!isPlate(it)) {
+        const st = it.state === 'raw' ? '' : `_${it.state}`;
+        return tpl(`i_${it.type}${st}`);
       }
-      it.contents.forEach((k, i) => {
-        const o = tpl(`i_${k}_cut`);
-        o.position.set(i === 0 ? -0.05 : 0.06, 0.025, i === 0 ? 0.02 : -0.03);
-        o.scale.setScalar(0.85);
+      const g = new THREE.Group();
+      const m = matchRecipe(it);
+      if (m) {
+        g.add(tpl(DISH_NODE[m.id]));
+        if (m.variant) {                                    // the extra: a chili pile or a lime
+          const x = tpl(m.variant === 'pedas' ? 'i_chili_cut' : 'i_citrus_cut');
+          x.scale.setScalar(0.5);
+          x.position.set(0.13, 0.03, 0.08);
+          g.add(x);
+        }
+        return g;
+      }
+      g.add(tpl('i_plate'));
+      it.parts.forEach((k, i) => {
+        const [type, state] = k.split(':');
+        const o = tpl(`i_${type}${state === 'raw' ? '' : `_${state}`}`);
+        const a = i * 2.1 + 0.4, r = it.parts.length > 1 ? 0.07 : 0;
+        o.position.set(Math.cos(a) * r, 0.025, Math.sin(a) * r);
+        o.scale.setScalar(0.62);
         g.add(o);
       });
       return g;
@@ -387,43 +704,112 @@ MabarGames.register({
       rec.seen = stamp;
     }
 
+    function soupColor(pot) {
+      if (pot.state === 'burnt') return '#2b2b2b';
+      const c = new THREE.Color(0, 0, 0);
+      for (const it of pot.items) c.add(new THREE.Color(ING[it.type].color));
+      c.multiplyScalar(1 / Math.max(1, pot.items.length));
+      if (pot.state === 'cooking') c.lerp(new THREE.Color('#f5e6c8'), 0.3);
+      return c;
+    }
+
     function syncScene(dt, time) {
       const stamp = time;
+      const t = time / 1000;
+      if (fx) fx.update(dt, t);
       for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-        const t = tiles[r][c];
-        if (t.item) placeItem(t.item, tileX(c), TOP + (t.ch === 'C' ? 0.04 : 0), tileZ(r), 0, stamp);
+        const tl = tiles[r][c];
+        if (tl.item) placeItem(tl.item, tileX(c), TOP + (tl.ch === 'B' ? 0.04 : tl.ch === 'S' ? 0.18 : CRATE[tl.ch] ? 0.3 : 0), tileZ(r), 0, stamp);
       }
       for (const [id, ch] of chefs) {
         const o = chefObjs.get(id);
         if (!o) continue;
         const ry = Math.atan2(ch.fx, ch.fz);
-        o.root.position.set(ch.x, Math.abs(Math.sin(ch.walk)) * 0.05 * ch.moving, ch.z);
-        o.root.rotation.y = ry;
-        const leg = Math.sin(ch.walk) * 0.8 * ch.moving;
-        if (o.legL) o.legL.rotation.x = leg;
-        if (o.legR) o.legR.rotation.x = -leg;
         const holding = !!ch.hold;
-        const chopA = ch.chopping > 0 ? Math.abs(Math.sin(time / 55)) : 0;
-        if (o.armR) o.armR.rotation.set(holding ? -1.3 : ch.chopping > 0 ? -1.5 + chopA * 0.8 : -0.2 - 0.4 * ch.moving * Math.sin(ch.walk), 0, holding ? -0.25 : 0.1);
-        if (o.armL) o.armL.rotation.set(holding ? -1.3 : -0.2 + 0.4 * ch.moving * Math.sin(ch.walk), 0, holding ? 0.25 : -0.1);
-        if (ch.hold) placeItem(ch.hold, ch.x + ch.fx * 0.42, 0.5, ch.z + ch.fz * 0.42, ry, stamp);
+        if (o.ch) {
+          o.root.position.set(ch.x, 0, ch.z);
+          const want = ry;
+          let d = want - o.root.rotation.y;
+          d = ((d + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+          o.root.rotation.y += d * Math.min(1, dt * 14);
+          o.ch.setVelocity(ch.vx, ch.vz);
+          if (ch.working > 0 && (o.ch.swingT < 0) && ch.workKind !== 'rinse') o.ch.swing(0.38, 'serve', 6 / 30);   // an overhead chop
+          if (ch.bump > 0) ch.bump -= dt;
+          o.ch.update(dt);
+        } else {
+          const moving = Math.hypot(ch.vx, ch.vz) > 0.2 ? 1 : 0;
+          o.walk = (o.walk || 0) + dt * 12 * moving;
+          o.root.position.set(ch.x, Math.abs(Math.sin(o.walk)) * 0.05 * moving, ch.z);
+          o.root.rotation.y = ry;
+          const leg = Math.sin(o.walk) * 0.8 * moving;
+          if (o.legL) o.legL.rotation.x = leg;
+          if (o.legR) o.legR.rotation.x = -leg;
+          const chopA = ch.working > 0 ? Math.abs(Math.sin(time / 55)) : 0;
+          if (o.armR) o.armR.rotation.set(holding ? -1.3 : ch.working > 0 ? -1.5 + chopA * 0.8 : -0.2 - 0.4 * moving * Math.sin(o.walk), 0, holding ? -0.25 : 0.1);
+          if (o.armL) o.armL.rotation.set(holding ? -1.3 : -0.2 + 0.4 * moving * Math.sin(o.walk), 0, holding ? 0.25 : -0.1);
+        }
+        if (ch.hold) placeItem(ch.hold, ch.x + ch.fx * 0.4, o.ch ? 0.62 : 0.5, ch.z + ch.fz * 0.4, ry, stamp);
         const hl = highlights.get(id);
         const tg = targetOf(ch);
         if (hl) {
-          hl.visible = !!tg;
+          hl.visible = !!tg && (phase === 'play' || phase === 'room');
           if (tg) hl.position.set(tileX(tg.c), (tg.ch === 'X' ? 0.66 : TOP) + 0.02, tileZ(tg.r));
         }
       }
       for (const [id, rec] of itemObjs) {
         if (rec.seen !== stamp) { scene.remove(rec.obj); itemObjs.delete(id); }
       }
-      for (const po of potObjs) {
-        const pot = tiles[po.r][po.c].pot;
-        if (!po.soup) continue;
-        po.soup.visible = pot.items.length > 0;
-        po.soup.position.y = 0.06 + 0.05 * Math.min(3, pot.items.length);
-        const col = pot.state === 'burnt' ? SOUP_COLOR.burnt : pot.items.length ? (pot.type ? SOUP_COLOR[pot.type] : ING_COLOR[pot.items[0]]) : '#fff';
-        po.soup.traverse((m) => { if (m.isMesh) m.material.color.set(col); });
+      // pots: soup colour and level, lid rattling when done, steam while cooking, smoke when burning
+      for (const [tile, po] of potObjs) {
+        const pot = tile.pot;
+        if (po.soup) {
+          po.soup.o.visible = pot.items.length > 0;
+          po.soup.o.position.y = po.soup.pos.y - 0.07 + 0.05 * Math.min(3, pot.items.length);   // the level rises with each thing added
+          const col = soupColor(pot);
+          po.soup.o.traverse((m) => { if (m.isMesh) m.material.color.set(col); });
+        }
+        if (po.lid) {
+          const rattle = pot.state === 'done' ? 0.02 * Math.abs(Math.sin(t * 22)) : pot.state === 'cooking' ? 0.008 * Math.abs(Math.sin(t * 14)) : 0;
+          po.lid.o.position.y = po.lid.pos.y + rattle;
+          po.lid.o.rotation.z = pot.state === 'done' ? 0.06 * Math.sin(t * 22) : 0;
+        }
+        const cooking = pot.state === 'cooking' || pot.state === 'done';
+        po.steam.forEach((s, i) => {
+          s.o.visible = cooking;
+          if (!cooking) return;
+          const u = (t * 0.55 + s.ph) % 1;
+          s.o.position.set(po.x + 0.12 * Math.sin(t * 2 + i), TOP + 0.45 + u * 0.9, po.z + 0.1 * Math.cos(t * 1.7 + i * 2));
+          s.o.scale.setScalar(0.5 + 1.2 * Math.sin(Math.PI * u));
+        });
+        const warn = pot.state === 'done' && pot.t > BOIL_GRACE * 0.5;
+        po.smoke.visible = pot.state === 'burnt' || warn;
+        if (po.smoke.visible) {
+          const u = (t * 0.7) % 1;
+          po.smoke.position.set(po.x, TOP + 0.5 + u * 1.1, po.z);
+          po.smoke.scale.setScalar((pot.state === 'burnt' ? 1.4 : 0.8) * (0.4 + Math.sin(Math.PI * u)));
+        }
+      }
+      for (const [tile, fo] of fryerObjs) {
+        const fr = tile.fryer;
+        if (fo.basket) fo.basket.o.position.y = fo.basket.pos.y - (fr.state === 'cooking' || fr.state === 'burnt' ? 0.06 : 0) + (fr.state === 'done' ? 0.02 * Math.abs(Math.sin(t * 18)) : 0);
+        if (fo.oil) fo.oil.o.scale.y = fo.oil.scale.y * (1 + (fr.state === 'cooking' ? 0.6 * Math.abs(Math.sin(t * 9)) : 0));
+        const warn = fr.state === 'done' && fr.t > FRY_GRACE * 0.5;
+        fo.smoke.visible = fr.state === 'burnt' || warn;
+        if (fo.smoke.visible) {
+          const u = (t * 0.7 + 0.3) % 1;
+          fo.smoke.position.set(fo.x, TOP + 0.4 + u * 1.1, fo.z);
+          fo.smoke.scale.setScalar((fr.state === 'burnt' ? 1.2 : 0.7) * (0.4 + Math.sin(Math.PI * u)));
+        }
+      }
+      for (const [tile, so] of sinkObjs) {
+        const rinsing = tile.item && tile.work > 0 && tile.work < 1 && [...chefs.values()].some((ch) => ch.working > 0 && ch.workKind === 'rinse' && targetOf(ch) === tile);
+        if (so.water) so.water.o.visible = rinsing || !!tile.item;
+        so.splash.visible = rinsing;
+        if (rinsing) { so.splash.position.set(so.x, TOP + 0.3 + 0.1 * Math.abs(Math.sin(t * 12)), so.z); so.splash.scale.setScalar(0.8 + 0.4 * Math.abs(Math.sin(t * 12))); }
+      }
+      for (const [tile, bo] of boardObjs) {
+        const chopping = tile.item && tile.work > 0 && tile.work < 1;
+        if (bo.knife) { bo.knife.o.rotation.x = chopping ? -0.5 + 0.5 * Math.abs(Math.sin(t * 16)) : 0; bo.knife.o.position.y = bo.knife.pos.y + (chopping ? 0.08 * Math.abs(Math.sin(t * 16)) : 0); }
       }
     }
 
@@ -434,48 +820,55 @@ MabarGames.register({
       return { x: (v.x + 1) / 2 * hub.W, y: (1 - v.y) / 2 * hub.H };
     }
     function dot(ctx, x, y, r, col) { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); }
-
     function bar(ctx, x, y, w, k, col) {
       rr(ctx, x - w / 2, y, w, 10, 5); ctx.fillStyle = 'rgba(20,20,26,0.75)'; ctx.fill();
       rr(ctx, x - w / 2 + 2, y + 2, Math.max(0, (w - 4) * Math.min(1, k)), 6, 3); ctx.fillStyle = col; ctx.fill();
+    }
+    // An ingredient pip: a coloured dot with the step's glyph on it.
+    function pip(ctx, x, y, part, r = 9) {
+      const [type, state] = part.split(':');
+      dot(ctx, x, y, r, ING[type] ? ING[type].color : '#999');
+      ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
+      const g = STATE_GLYPH[state];
+      if (g) {
+        ctx.fillStyle = state === 'cooked' || state === 'fried' ? '#1d2433' : '#1d2433';
+        ctx.font = hub.font(800, r * 1.3);
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(g, x, y + 1);
+      }
     }
 
     function drawWorldUi(ctx, time) {
       for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
         const t = tiles[r][c];
-        if (t.ch === 'C' && t.item && !t.item.chopped && t.chop > 0) {
-          const s = screenOf(tileX(c), TOP + 0.4, tileZ(r));
-          bar(ctx, s.x, s.y, 54, t.chop, '#2ed573');
+        if ((t.ch === 'B' || t.ch === 'S') && t.item && t.work > 0) {
+          const s = screenOf(tileX(c), TOP + 0.5, tileZ(r));
+          bar(ctx, s.x, s.y, 54, t.work, t.ch === 'S' ? '#4dabf7' : '#2ed573');
         }
-        if (t.pot && t.pot.items.length) {
+        if (t.pot && (t.pot.items.length || t.pot.state === 'burnt')) {
           const pot = t.pot;
-          const s = screenOf(tileX(c), TOP + 0.75, tileZ(r));
-          // ingredient pips
-          for (let i = 0; i < 3; i++) dot(ctx, s.x - 16 + i * 16, s.y - 18, 6, pot.items[i] ? ING_COLOR[pot.items[i]] : 'rgba(20,20,26,0.35)');
-          if (pot.state === 'cooking') bar(ctx, s.x, s.y - 4, 60, pot.t / COOK, '#ffd32a');
-          if (pot.state === 'done') {
-            const warn = pot.t > BURN * 0.45;
-            const flash = warn && Math.sin(time / 90) > 0;
-            rr(ctx, s.x - 26, s.y - 8, 52, 24, 12);
-            ctx.fillStyle = flash ? '#ff4757' : '#2ed573';
-            ctx.fill();
-            ctx.fillStyle = '#fff';
-            ctx.font = hub.font(800, 14);
-            ctx.textAlign = 'center';
-            ctx.fillText(warn ? '! !' : '✓', s.x, s.y + 5);
+          const s = screenOf(tileX(c), TOP + 0.85, tileZ(r));
+          for (let i = 0; i < POT_MAX; i++) {
+            if (pot.items[i]) pip(ctx, s.x - 18 + i * 18, s.y - 20, partKey(pot.items[i]), 7);
+            else dot(ctx, s.x - 18 + i * 18, s.y - 20, 6, 'rgba(20,20,26,0.35)');
           }
-          if (pot.state === 'burnt') {
-            ctx.font = hub.font(800, 14);
-            ctx.textAlign = 'center';
-            ctx.fillStyle = '#ff4757';
-            ctx.fillText('BURNT', s.x, s.y + 4);
-          }
+          if (pot.state === 'cooking') bar(ctx, s.x, s.y - 6, 60, pot.t / BOIL, '#ffd32a');
+          if (pot.state === 'done') readyBadge(ctx, s.x, s.y, pot.t > BOIL_GRACE * 0.5, time);
+          if (pot.state === 'burnt') { if (t.work > 0) bar(ctx, s.x, s.y - 6, 60, t.work, '#adb5bd'); burntBadge(ctx, s.x, s.y); }
+        }
+        if (t.fryer && (t.fryer.item || t.fryer.state === 'burnt')) {
+          const fr = t.fryer;
+          const s = screenOf(tileX(c), TOP + 0.85, tileZ(r));
+          if (fr.item) pip(ctx, s.x, s.y - 20, partKey(fr.item), 7);
+          if (fr.state === 'cooking') bar(ctx, s.x, s.y - 6, 60, fr.t / FRY, '#ffd32a');
+          if (fr.state === 'done') readyBadge(ctx, s.x, s.y, fr.t > FRY_GRACE * 0.5, time);
+          if (fr.state === 'burnt') { if (t.work > 0) bar(ctx, s.x, s.y - 6, 60, t.work, '#adb5bd'); burntBadge(ctx, s.x, s.y); }
         }
       }
       for (const pp of popups) {
         const s = screenOf(pp.x, TOP + 0.9, pp.z);
-        ctx.globalAlpha = Math.max(0, 1 - pp.t / 1.2);
-        ctx.font = hub.font(800, 18);
+        ctx.globalAlpha = Math.max(0, 1 - pp.t / 1.3);
+        ctx.font = hub.font(800, 17);
         ctx.textAlign = 'center';
         ctx.lineWidth = 5;
         ctx.strokeStyle = 'rgba(20,20,26,0.6)';
@@ -483,53 +876,98 @@ MabarGames.register({
         ctx.fillStyle = pp.color;
         ctx.fillText(pp.text, s.x, s.y - pp.t * 30);
       }
+      for (const b of bell) {                             // the served dish's name floats off the hatch
+        const s = screenOf(b.x, TOP + 1.2, b.z);
+        ctx.globalAlpha = Math.max(0, 1 - b.t / 1.6);
+        ctx.font = hub.font(800, 20);
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#ffffff';
+        ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(20,20,26,0.6)';
+        const txt = `🔔 ${recipeName(b.recipe, b.variant)}`;
+        ctx.strokeText(txt, s.x, s.y - b.t * 40);
+        ctx.fillText(txt, s.x, s.y - b.t * 40);
+      }
       ctx.globalAlpha = 1;
     }
+    function readyBadge(ctx, x, y, warn, time) {
+      const flash = warn && Math.sin(time / 90) > 0;
+      rr(ctx, x - 26, y - 8, 52, 24, 12);
+      ctx.fillStyle = flash ? '#ff4757' : '#2ed573';
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.font = hub.font(800, 14);
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(warn ? '! !' : '✓', x, y + 4);
+    }
+    function burntBadge(ctx, x, y) {
+      ctx.font = hub.font(800, 14);
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ff4757';
+      ctx.fillText('BURNT', x, y + 4);
+    }
 
+    // Order cards: name, container, the parts with their step glyphs, patience.
     function drawOrders(ctx) {
-      const w = 150, h = 92;
-      orders.slice(0, 5).forEach((o, i) => {
-        const R = RECIPES[o.key];
+      const w = 164, h = 96;
+      orders.slice(0, 6).forEach((o, i) => {
+        const R = RECIPES[o.id];
         const x = 18 + i * (w + 10), y = 16;
         const k = 1 - o.t / o.life;
+        const shake = k < 0.2 ? Math.sin(performance.now() / 40) * 2 : 0;
         ctx.save();
+        ctx.translate(shake, 0);
         ctx.shadowColor = 'rgba(0,0,0,0.2)';
         ctx.shadowBlur = 12;
         rr(ctx, x, y, w, h, 14);
         ctx.fillStyle = '#ffffff';
         ctx.fill();
         ctx.restore();
+        ctx.save();
+        ctx.translate(shake, 0);
         rr(ctx, x, y, w, 8, [14, 14, 0, 0]);
-        ctx.fillStyle = R.color;
+        ctx.fillStyle = o.variant ? '#ff4b3e' : '#ffb020';
         ctx.fill();
         ctx.fillStyle = '#2a2a2a';
-        ctx.font = hub.font(800, 15);
+        ctx.font = hub.font(800, 13);
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(R.name, x + w / 2, y + 28);
-        R.icons.forEach((ic, j) => dot(ctx, x + w / 2 - (R.icons.length - 1) * 11 + j * 22, y + 54, 8, ING_COLOR[ic]));
-        bar(ctx, x + w / 2, y + 72, w - 24, k, k > 0.5 ? '#2ed573' : k > 0.25 ? '#ffd32a' : '#ff4757');
+        ctx.fillText(R.name, x + w / 2, y + 26);
+        if (o.variant) {
+          ctx.fillStyle = '#ff4b3e';
+          ctx.font = hub.font(800, 11);
+          ctx.fillText(o.variant === 'pedas' ? '🌶 PEDAS' : '+ CITRUS', x + w / 2, y + 42);
+        } else {
+          ctx.fillStyle = '#9a9286';
+          ctx.font = hub.font(600, 11);
+          ctx.fillText(R.container === 'bowl' ? 'in a bowl' : R.container === 'glass' ? 'in a glass' : 'on a plate', x + w / 2, y + 42);
+        }
+        const n = o.parts.length;
+        o.parts.forEach((part, j) => pip(ctx, x + w / 2 - (n - 1) * 11 + j * 22, y + 60, part, 8));
+        bar(ctx, x + w / 2, y + 76, w - 24, k, k > 0.5 ? '#2ed573' : k > 0.25 ? '#ffd32a' : '#ff4757');
+        ctx.restore();
       });
     }
 
     function drawTopRight(ctx) {
       const { W } = hub;
       const t = phase === 'play' ? Math.max(0, SHIFT - shiftT) : SHIFT;
-      rr(ctx, W - 190, 16, 172, 112, 16);
+      rr(ctx, W - 190, 16, 172, 118, 16);
       ctx.fillStyle = 'rgba(20,20,26,0.82)';
       ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,255,0.55)';
-      ctx.font = hub.font(600, 12);
-      ctx.textAlign = 'center';
-      ctx.fillText(`JOIN CODE ${hub.code || '····'} · H for QR`, W - 104, 112);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = '#ffd32a';
       ctx.font = hub.font(800, 30);
-      ctx.fillText(`★ ${score}`, W - 104, 46);
+      ctx.fillText(`★ ${score}`, W - 104, 44);
       ctx.fillStyle = t < 20 && phase === 'play' ? '#ff6b6b' : '#ffffff';
       ctx.font = hub.font(700, 20);
-      ctx.fillText(`${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`, W - 104, 84);
+      ctx.fillText(`${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`, W - 104, 78);
+      ctx.fillStyle = combo >= 3 ? '#2ed573' : 'rgba(255,255,255,0.55)';
+      ctx.font = hub.font(600, 12);
+      ctx.fillText(combo >= 3 ? `COMBO ×${combo}` : `${kit.name.toUpperCase()} · ${hub.code || '····'}`, W - 104, 104);
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.font = hub.font(600, 10);
+      ctx.fillText('H for the QR', W - 104, 122);
     }
 
     function card(ctx, lines, wMax = 560) {
@@ -555,13 +993,16 @@ MabarGames.register({
       });
     }
 
+    // The waiting room: join QR, the map carousel (host: ← → or click, phones:
+    // d-pad left/right), this map's recipes, votes.
+    let roomHits = [];
     function drawRoomCard(ctx) {
       const { W, H } = hub;
       const n = Math.min(MAX_CHEFS, hub.players.size);
       const need = [...hub.players.keys()].filter((id) => !votes.has(id)).length;
-      const wide = W >= 760;
-      const cw = Math.min(780, W - 32), chh = wide ? 330 : 520;
-      const x0 = (W - cw) / 2, y0 = Math.max(130, (H - chh) / 2);
+      const wide = W >= 820;
+      const cw = Math.min(860, W - 32), chh = wide ? 400 : 620;
+      const x0 = (W - cw) / 2, y0 = Math.max(14, (H - chh) / 2);
       ctx.save();
       ctx.shadowColor = 'rgba(0,0,0,0.25)';
       ctx.shadowBlur = 30;
@@ -572,13 +1013,13 @@ MabarGames.register({
       rr(ctx, x0, y0, cw, 8, [24, 24, 0, 0]);
       ctx.fillStyle = '#ff4b3e';
       ctx.fill();
-      const qs = wide ? 190 : 160;
-      const qx = wide ? x0 + 32 : x0 + (cw - qs) / 2, qy = y0 + 34;
+      const qs = wide ? 180 : 150;
+      const qx = wide ? x0 + 30 : x0 + (cw - qs) / 2, qy = y0 + 36;
       hub.drawJoin(ctx, qx, qy, qs, { label: 'Scan with your phone to join' });
-      const rx = wide ? qx + qs + 36 : x0 + 24, rw = wide ? cw - (rx - x0) - 28 : cw - 48;
+      const rx = wide ? qx + qs + 30 : x0 + 20, rw = wide ? cw - (rx - x0) - 26 : cw - 40;
       const cx = rx + rw / 2;
-      let y = wide ? y0 + 58 : qy + qs + 92;
-      const line = (t, size, weight, color, gap = 30) => {
+      let y = wide ? y0 + 48 : qy + qs + 84;
+      const line = (t, size, weight, color, gap = 28) => {
         ctx.font = hub.font(weight, size);
         ctx.fillStyle = color;
         ctx.textAlign = 'center';
@@ -586,38 +1027,114 @@ MabarGames.register({
         ctx.fillText(t, cx, y);
         y += gap;
       };
-      line('COOKING', 30, 800, '#ff4b3e', 44);
-      line(n ? `Kitchen opens in ${Math.ceil(roomT)}s` : 'Waiting for the first chef', 22, 800, '#1d2433', 40);
-      line('Move with the stick. A grabs and drops, X chops, B dashes.', 14, 600, '#3a3630', 26);
-      line('Soup: 3 chopped tomatoes or onions in a pot.', 14, 500, '#6b665e', 22);
-      line('Salad: chopped lettuce and tomato on a plate.', 14, 500, '#6b665e', 36);
-      line(n ? (need ? `Walk around and practise. ${need} more vote${need > 1 ? 's' : ''} to start now.` : 'Starting…')
-        : 'Up to 4 chefs.', 14, 600, '#5d584f');
+      line('COOKING', 28, 800, '#ff4b3e', 34);
+      line(n ? `Kitchen opens in ${Math.ceil(roomT)}s` : 'Waiting for the first chef', 20, 800, '#1d2433', 40);
+      // map carousel
+      roomHits = [];
+      const ids = MAP_IDS;
+      const cardW = Math.min(150, (rw - 80) / ids.length - 8), cardH = 74;
+      const totalW = ids.length * (cardW + 8) - 8;
+      ids.forEach((id, i) => {
+        const k = K[id];
+        const bx = cx - totalW / 2 + i * (cardW + 8), by = y - 10;
+        const on = id === mapId;
+        rr(ctx, bx, by, cardW, cardH, 12);
+        ctx.fillStyle = on ? '#ff4b3e' : '#f3efe8';
+        ctx.fill();
+        ctx.fillStyle = on ? '#ffffff' : '#1d2433';
+        ctx.font = hub.font(800, 13);
+        ctx.fillText(k.name, bx + cardW / 2, by + 20);
+        ctx.fillStyle = on ? 'rgba(255,255,255,0.85)' : '#6b665e';
+        ctx.font = hub.font(500, 10);
+        ctx.fillText(k.subtitle, bx + cardW / 2, by + 36);
+        k.recipes.forEach((rid, j) => {
+          ctx.font = hub.font(600, 9);
+          ctx.fillText(RECIPES[rid].name, bx + cardW / 2, by + 50 + j * 10);
+        });
+        roomHits.push({ x: bx, y: by, w: cardW, h: cardH, act: () => { pickMap(id); } });
+      });
+      y += cardH + 2;
+      line('◀ ▶  or click to choose the kitchen (phones: d-pad left / right)', 11, 600, '#9a9286', 24);
+      // recipe book for the chosen map
+      ctx.font = hub.font(600, 12);
+      for (const rid of kit.recipes) {
+        const R = RECIPES[rid];
+        const steps = R.parts.map((p) => { const [tp, st] = p.split(':'); return `${STATE_WORD[st] ? STATE_WORD[st] + ' ' : ''}${ING[tp].name}`; }).join(' + ');
+        line(`${R.name}: ${steps} → ${R.container}`, 12, 500, '#3a3630', 18);
+      }
+      y += 4;
+      line('Move with the stick · A grab / put / use · hold X to chop, rinse, scrape · B dash', 12, 600, '#5d584f', 22);
+      line(n ? (need ? `${need} more vote${need > 1 ? 's' : ''} to start now (tap “Vote to start”)` : 'Starting…') : 'Up to 4 chefs. Walk around and practise while you wait.', 13, 600, '#5d584f');
+    }
+    function pickMap(id, dir = 0) {
+      if (phase !== 'room' || !K[id]) return;
+      if (dir) id = MAP_IDS[(MAP_IDS.indexOf(mapId) + dir + MAP_IDS.length) % MAP_IDS.length];
+      if (id === mapId) return;
+      loadKitchen(id);
+      respawnChefs();
+      loadEnv(id);
     }
 
     function drawOver(ctx) {
-      const stars = score >= 160 ? 3 : score >= 100 ? 2 : score >= 40 ? 1 : 0;
+      const s = stars();
+      const p = par(Math.max(1, chefs.size));
       card(ctx, [
         { t: 'SHIFT OVER!', s: 30, w: 800, c: '#ff4b3e' },
-        { t: '★'.repeat(stars) + '☆'.repeat(3 - stars), s: 40, w: 800, c: '#ffb020' },
-        { t: `${score} points`, s: 24, w: 800, c: '#222' },
-        { t: `${served} served · ${failed} missed`, s: 16 },
+        { t: '★'.repeat(s) + '☆'.repeat(3 - s), s: 40, w: 800, c: '#ffb020' },
+        { t: `${score} points  (3 stars at ${p})`, s: 22, w: 800, c: '#222' },
+        { t: `${served} served · ${failed} missed · best combo ×${bestCombo}`, s: 15 },
         { t: `Back to the kitchen in ${Math.ceil(phaseT)}…`, s: 14, c: '#7a7368' },
       ]);
     }
 
-    // ---------------- load ----------------
-    Promise.all([Kit3D.load('assets/kitchen.glb', (p) => { loadP = p; }), Kit3D.load('assets/characters.glb')])
-      .then(([k, chars]) => { if (!stopped) setup(k, chars); })
+    // ---------------- loading ----------------
+    const envCache = new Map();
+    function loadEnv(id) {
+      const k = K[id];
+      if (!k) return Promise.resolve(null);
+      if (!envCache.has(id)) {
+        envCache.set(id, Kit3D.load(k.env, (p) => { loadP = p; }).catch((e) => {
+          console.warn(`[mabar] ${k.env} failed, using a plain floor`, e);
+          return null;
+        }));
+      }
+      return envCache.get(id).then((g) => {
+        if (stopped || id !== mapId) return g;
+        env = g;
+        if (scene) buildMap3D();
+        return g;
+      });
+    }
+
+    loadKitchen(mapId);
+    const animalsP = window.MabarChars ? Promise.all(ANIMALS.map((id) => MabarChars.load(id).catch(() => null))) : Promise.resolve([]);
+    Promise.all([Kit3D.load('assets/kitchen.glb', (p) => { loadP = p; }), Kit3D.load('assets/characters.glb').catch(() => null), loadEnv(mapId), animalsP])
+      .then(([k, c]) => { if (stopped) return; kitAsset = k; chars = c; setup(); })
       .catch((e) => { loadErr = 'Couldn’t load the kitchen'; console.error(e); });
 
     toRoom();
+
+    // Host-screen input for the room card.
+    const arena = document.querySelector('#arena');
+    const hitAt = (e) => roomHits.find((h) => e.clientX >= h.x && e.clientX <= h.x + h.w && e.clientY >= h.y && e.clientY <= h.y + h.h) || null;
+    const onClick = (e) => { const h = phase === 'room' && hitAt(e); if (h) h.act(); };
+    const onKey = (e) => {
+      if (e.repeat || (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) || phase !== 'room') return;
+      if (e.code === 'ArrowLeft' || e.code === 'BracketLeft') pickMap(null, -1);
+      else if (e.code === 'ArrowRight' || e.code === 'BracketRight') pickMap(null, 1);
+    };
+    arena.addEventListener('click', onClick);
+    window.addEventListener('keydown', onKey);
 
     return {
       start() { for (const p of hub.players.values()) addChef(p); hub.showLobby(false, false); },
       stop() {
         stopped = true;
+        arena.removeEventListener('click', onClick);
+        window.removeEventListener('keydown', onKey);
         hub.showLobby(true);
+        for (const o of chefObjs.values()) if (o.ch) o.ch.dispose();
+        if (fx) fx.dispose();
         if (scene) scene.clear();
         if (renderer) renderer.dispose_();
       },
@@ -627,9 +1144,13 @@ MabarGames.register({
       press(p, bits) {
         const ch = chefs.get(p.id);
         if (!ch) return;
-        if (bits & B.A) interact(ch);
-        if (bits & B.X) chop(ch, 0.17);
-        if (bits & B.B && ch.dashCd <= 0) { ch.dash = 0.18; ch.dashCd = 0.6; }
+        if (bits & B.A) { if (phase === 'over') return; interact(ch); }
+        if (bits & B.X) work(ch, 0.2);
+        if (bits & B.B && ch.dashCd <= 0 && (phase === 'play' || phase === 'room')) { ch.dash = DASH; ch.dashCd = DASH_CD; rumble(ch, 10); }
+        if (phase === 'room') {
+          if (bits & B.LEFT && Math.hypot(p.sx, p.sy) < 0.05) pickMap(null, -1);
+          if (bits & B.RIGHT && Math.hypot(p.sx, p.sy) < 0.05) pickMap(null, 1);
+        }
       },
       action(p) {
         if (phase !== 'room') return;
@@ -644,16 +1165,30 @@ MabarGames.register({
         const ch = chefs.get(p.id);
         if (!ch) return 'Kitchen is full — watch and join next shift';
         if (phase === 'over') return 'Shift over!';
-        const what = ch.hold ? (ch.hold.type === 'plate'
-          ? (ch.hold.soup ? `${ch.hold.soup} soup` : ch.hold.contents.length ? 'salad plate' : 'empty plate')
-          : `${ch.hold.chopped ? 'chopped ' : ''}${ch.hold.type}`) : '';
-        return (what ? `Holding ${what} · ` : '') + 'A grab · X chop · B dash';
+        const h = ch.hold;
+        if (!h) return 'A grab · hold X chop/rinse · B dash';
+        if (isPlate(h)) {
+          const m = matchRecipe(h);
+          if (m) return `${recipeName(m.id, m.variant)} · serve it at the hatch (A)`;
+          return h.parts.length ? `Plate: ${h.parts.map((k) => { const [tp, st] = k.split(':'); return `${STATE_WORD[st] ? STATE_WORD[st] + ' ' : ''}${ING[tp].name}`; }).join(', ')}` : 'Empty plate · add cooked food';
+        }
+        const d = ING[h.type];
+        const nm = d ? d.name : h.type;
+        if (h.state === 'raw' && d && d.prep === 'board') return `${nm}: chop it at a board (A, then hold X)`;
+        if (h.state === 'raw' && d && d.prep === 'sink') return `${nm}: rinse it at the sink (A, then hold X)`;
+        if (h.state === 'rinsed') return `rinsed ${nm}: boil it in a pot (A)`;
+        if (h.type === 'noodles' && h.state === 'raw') return 'noodles: boil them in a pot (A)';
+        if (h.state === 'cut' && d && d.boil && d.fry) return `chopped ${nm}: boil, fry, or plate it (A)`;
+        if (h.state === 'cut' && d && d.boil) return `chopped ${nm}: boil it, or plate it (A)`;
+        if (h.state === 'cut' && d && d.fry) return `chopped ${nm}: fry it (A)`;
+        return `${STATE_WORD[h.state] ? STATE_WORD[h.state] + ' ' : ''}${nm}: plate it (A)`;
       },
       meta(p) { return chefs.has(p.id) ? (phase === 'room' ? (votes.has(p.id) ? 'voted' : 'chef') : 'chef') : 'watching'; },
       resize() { if (renderer) { renderer.setSize(hub.W, hub.H, false); placeCamera(); } },
 
       update(dt) {
-        for (let i = popups.length - 1; i >= 0; i--) { popups[i].t += dt; if (popups[i].t > 1.2) popups.splice(i, 1); }
+        for (let i = popups.length - 1; i >= 0; i--) { popups[i].t += dt; if (popups[i].t > 1.3) popups.splice(i, 1); }
+        for (let i = bell.length - 1; i >= 0; i--) { bell[i].t += dt; if (bell[i].t > 1.6) bell.splice(i, 1); }
         if (phase === 'room') {
           for (const p of hub.players.values()) addChef(p);
           if (hub.players.size) {
@@ -663,58 +1198,65 @@ MabarGames.register({
           } else roomT = ROOM_TIME;
         } else if (phase === 'countdown') {
           phaseT -= dt;
-          if (phaseT <= 0) { phase = 'play'; shiftT = 0; addOrder(); addOrder(); nextOrderT = 18; }
+          if (phaseT <= 0) { phase = 'play'; shiftT = 0; addOrder(); addOrder(); nextOrderT = 12; }
         } else if (phase === 'play') {
           shiftT += dt;
           nextOrderT -= dt;
-          if (nextOrderT <= 0 && orders.length < 5) { addOrder(); nextOrderT = 16 + Math.random() * 8; }
+          const pace = paceFor(chefs.size);
+          if (nextOrderT <= 0 && orders.length < pace.max) { addOrder(); nextOrderT = pace.gap * (1 - 0.25 * shiftT / SHIFT) * (0.85 + Math.random() * 0.3); }
           if (!orders.length && nextOrderT > 3) nextOrderT = 3;
           for (let i = orders.length - 1; i >= 0; i--) {
             orders[i].t += dt;
             if (orders[i].t >= orders[i].life) {
-              orders.splice(i, 1);
+              const o = orders.splice(i, 1)[0];
               score = Math.max(0, score - 10);
               failed++;
-              popups.push({ text: 'Order missed! −10', x: 0, z: -3.5, color: '#ff6b6b', t: 0 });
+              combo = 0;
+              popups.push({ text: `${recipeName(o.id, o.variant)} missed! −10`, x: 0, z: tileZ(0) + 1, color: '#ff6b6b', t: 0 });
+              for (const p of hub.players.values()) hub.rumble(p, 90);
             }
           }
-          if (shiftT >= SHIFT) { phase = 'over'; phaseT = 9; }
+          for (let i = plateReturns.length - 1; i >= 0; i--) { plateReturns[i] -= dt; if (plateReturns[i] <= 0) plateReturns.splice(i, 1); }
+          if (shiftT >= SHIFT) endShift();
         } else if (phase === 'over') {
           phaseT -= dt;
           if (phaseT <= 0) toRoom();
         }
 
-        // pots cook during the shift (and in practice)
+        // pots and fryers cook during the shift (and in practice)
         for (const row of tiles) for (const t of row) {
-          if (!t.pot) continue;
-          if (t.pot.state === 'cooking') {
-            t.pot.t += dt;
-            if (t.pot.t >= COOK) { t.pot.state = 'done'; t.pot.t = 0; }
-          } else if (t.pot.state === 'done') {
-            t.pot.t += dt;
-            if (t.pot.t >= BURN) { t.pot.state = 'burnt'; t.pot.type = 'burnt'; }
+          if (t.pot) {
+            const pot = t.pot;
+            if (pot.state === 'cooking') { pot.t += dt; if (pot.t >= BOIL) { pot.state = 'done'; pot.t = 0; } }
+            else if (pot.state === 'done') { pot.t += dt; if (pot.t >= BOIL_GRACE) { pot.state = 'burnt'; pot.t = 0; t.work = 0; popups.push({ text: 'Burnt!', x: tileX(t.c), z: tileZ(t.r), color: '#ff6b6b', t: 0 }); } }
+          }
+          if (t.fryer) {
+            const fr = t.fryer;
+            if (fr.state === 'cooking') { fr.t += dt; if (fr.t >= FRY) { fr.state = 'done'; fr.t = 0; } }
+            else if (fr.state === 'done') { fr.t += dt; if (fr.t >= FRY_GRACE) { fr.state = 'burnt'; fr.t = 0; t.work = 0; popups.push({ text: 'Burnt!', x: tileX(t.c), z: tileZ(t.r), color: '#ff6b6b', t: 0 }); } }
           }
         }
 
-        // movement (frozen during countdown / results)
+        // movement (frozen during the countdown and the results)
         const canMove = phase === 'room' || phase === 'play';
         for (const [id, ch] of chefs) {
           const p = hub.players.get(id);
-          ch.chopping = Math.max(0, ch.chopping - dt);
+          ch.working = Math.max(0, ch.working - dt);
           ch.dashCd = Math.max(0, ch.dashCd - dt);
           if (!p) continue;
-          if (p.b & B.X) chop(ch, dt * 0.9);  // holding X keeps chopping
-          const d = canMove ? hub.dir(p) : { x: 0, y: 0 };
+          const busy = p.b & B.X && canMove && work(ch, dt);   // holding X keeps chopping (and holds you there)
+          const d = canMove && !busy ? hub.dir(p) : { x: 0, y: 0 };
           const m = Math.hypot(d.x, d.y);
           let vx = 0, vz = 0;
           if (m > 0.15) {
             ch.fx = d.x / m; ch.fz = d.y / m;
             vx = d.x * SPEED; vz = d.y * SPEED;
           }
-          if (ch.dash > 0) { ch.dash -= dt; vx += ch.fx * 11; vz += ch.fz * 11; }
-          ch.moving += ((m > 0.15 ? 1 : 0) - ch.moving) * Math.min(1, dt * 10);
-          ch.walk += dt * 12 * ch.moving;
+          if (ch.dash > 0) { ch.dash -= dt; vx += ch.fx * DASH_SPEED; vz += ch.fz * DASH_SPEED; }
+          const px = ch.x, pz = ch.z;
           move(ch, vx * dt, vz * dt);
+          ch.vx += ((ch.x - px) / Math.max(dt, 1e-3) - ch.vx) * Math.min(1, dt * 12);
+          ch.vz += ((ch.z - pz) / Math.max(dt, 1e-3) - ch.vz) * Math.min(1, dt * 12);
         }
         // chefs push each other apart
         const list = [...chefs.values()];
@@ -744,7 +1286,7 @@ MabarGames.register({
         syncScene(dt, time);
         renderer.render(scene, camera);
         drawWorldUi(ctx, time);
-        drawOrders(ctx);
+        if (phase === 'play' || phase === 'countdown') drawOrders(ctx);
         drawTopRight(ctx);
         if (phase === 'room') drawRoomCard(ctx);
         if (phase === 'countdown') {
@@ -761,15 +1303,27 @@ MabarGames.register({
         if (phase === 'over') drawOver(ctx);
       },
 
-      _fastForward(sec) { if (phase === 'room') roomT -= sec; else if (phase === 'play') shiftT += sec; },
+      // Test hooks (tools/smoke.mjs).
+      _fastForward(sec) { if (phase === 'room') roomT -= sec; else if (phase === 'play') { shiftT += sec; for (const o of orders) o.t += sec; } else if (phase === 'countdown') phaseT -= sec; },
       _debug: () => ({
-        phase, score, served, failed, orders: orders.map((o) => o.key),
-        chefs: [...chefs.values()].map((c) => ({ name: c.name, x: +c.x.toFixed(2), z: +c.z.toFixed(2), hold: c.hold && itemKey(c.hold), target: (targetOf(c) || {}).ch })),
-        pots: tiles ? tiles[0].filter((t) => t.pot).map((t) => ({ items: t.pot.items.length, state: t.pot.state })) : [],
-        boards: tiles ? tiles.flat().filter((t) => t.ch === 'C').map((t) => t.item && itemKey(t.item)) : [],
+        phase, map: mapId, sceneMap, score, served, failed, combo, orders: orders.map((o) => o.id + (o.variant ? ':' + o.variant : '')),
+        chefs: [...chefs.values()].map((c) => ({ name: c.name, x: +c.x.toFixed(2), z: +c.z.toFixed(2), hold: c.hold && itemKey(c.hold), target: (targetOf(c) || {}).ch, animal: (chefObjs.get(c.id) || {}).ch ? chefObjs.get(c.id).ch.id : 'chibi' })),
+        pots: tiles.flat().filter((t) => t.pot).map((t) => ({ items: t.pot.items.length, state: t.pot.state })),
+        fryers: tiles.flat().filter((t) => t.fryer).map((t) => ({ item: t.fryer.item && itemKey(t.fryer.item), state: t.fryer.state })),
+        boards: tiles.flat().filter((t) => t.ch === 'B').map((t) => t.item && itemKey(t.item)),
+        env: !!env, stations: stationObjs.length,
       }),
-      _order(key) { orders.push({ id: uid++, key, t: 0, life: 80 }); },
+      _order(key, variant = null) { addOrder({ id: key, variant }); },
       _teleport(id, c, r, fx, fz) { const ch = chefs.get(id); if (ch) { ch.x = tileX(c); ch.z = tileZ(r); ch.fx = fx; ch.fz = fz; } },
+      _give(id, type, state = 'raw', parts = null) { const ch = chefs.get(id); if (!ch) return; ch.hold = newItem(type, state); if (parts) ch.hold.parts = parts; },
+      _setMap(id) { pickMap(id); },
+      _tick(sec) {                                           // advance cooking timers without waiting
+        for (const row of tiles) for (const t of row) {
+          if (t.pot && (t.pot.state === 'cooking' || t.pot.state === 'done')) t.pot.t += sec;
+          if (t.fryer && (t.fryer.state === 'cooking' || t.fryer.state === 'done')) t.fryer.t += sec;
+        }
+      },
+      _press(id, bit) { const p = hub.players.get(id); if (p) this.press(p, bit); },
     };
 
     // circle-vs-tile collision, one axis at a time
