@@ -65,13 +65,16 @@
       if (mixer) for (const clip of gltf.animations) mixer.clipAction(clip).setLoop(THREE.LoopRepeat, Infinity).play();
       const trees = [], flags = [], crowd = [], umbrellas = [], clouds = [], steams = [], waters = [];
       const rnd = () => Math.random() * Math.PI * 2;
+      // The rest pose is remembered on the node: a file can be livened again later
+      // (another scene, a rebuilt one) without the last frame's sway becoming its base.
+      const rest = (o, make) => o.userData.rest || (o.userData.rest = make());
       root.traverse((o) => {
         const n = o.name || '';
-        if (/^tree_\d+$/.test(n)) trees.push({ o, rx: o.rotation.x, rz: o.rotation.z, ph: rnd() });
-        else if (/^crowd_\d+$/.test(n)) crowd.push({ o, y: o.position.y, ph: rnd(), cheer: 0, delay: 0 });
-        else if (/^umbrella_\d+$/.test(n)) umbrellas.push({ o, ph: rnd() });
+        if (/^tree_\d+$/.test(n)) trees.push({ o, ...rest(o, () => ({ rx: o.rotation.x, rz: o.rotation.z })), ph: rnd() });
+        else if (/^crowd_\d+$/.test(n)) crowd.push({ o, ...rest(o, () => ({ y: o.position.y })), ph: rnd(), cheer: 0, delay: 0 });
+        else if (/^umbrella_\d+$/.test(n)) umbrellas.push({ o, ...rest(o, () => ({ rx: o.rotation.x, rz: o.rotation.z })), ph: rnd() });
         else if (/^cloud_\d+$/.test(n)) clouds.push({ o, a: Math.atan2(o.position.x, o.position.z), r: Math.hypot(o.position.x, o.position.z), w: 0.004 + Math.random() * 0.004 });
-        else if (/^steam_\d+$/.test(n)) steams.push({ o, y: o.position.y, ph: Math.random() });
+        else if (/^steam_\d+$/.test(n)) steams.push({ o, ...rest(o, () => ({ y: o.position.y, s: o.scale.x })), ph: Math.random() });
         if (o.isMesh) {
           if (/^(flag|bunt)_\d+/.test(n) && o.morphTargetInfluences && o.morphTargetInfluences.length) {
             flags.push({ m: o, ph: rnd(), rate: 4 + Math.random() * 3, amp: /^flag/.test(n) ? 0.9 : 1 });
@@ -116,8 +119,8 @@
           }
           for (const f of flags) f.m.morphTargetInfluences[0] = f.amp * (0.4 + 0.5 * gust) * Math.sin(t * f.rate + f.ph);
           for (const u of umbrellas) {
-            u.o.rotation.x = 0.02 * gust * Math.sin(t * 1.3 + u.ph);
-            u.o.rotation.z = 0.02 * gust * Math.sin(t * 0.9 + u.ph);
+            u.o.rotation.x = u.rx + 0.02 * gust * Math.sin(t * 1.3 + u.ph);
+            u.o.rotation.z = u.rz + 0.02 * gust * Math.sin(t * 0.9 + u.ph);
           }
           for (const c of crowd) {
             let y = 0.04 * Math.max(0, Math.sin(t * 2.2 + c.ph));     // a lazy bob while watching
@@ -151,6 +154,10 @@
         dispose() {
           if (mixer) { mixer.stopAllAction(); mixer.uncacheRoot(root); }
           for (const c of crowd) c.o.position.y = c.y;
+          for (const e of trees) { e.o.rotation.x = e.rx; e.o.rotation.z = e.rz; }
+          for (const u of umbrellas) { u.o.rotation.x = u.rx; u.o.rotation.z = u.rz; }
+          for (const s of steams) { s.o.position.y = s.y; s.o.scale.setScalar(s.s); }
+          for (const f of flags) f.m.morphTargetInfluences[0] = 0;
         },
       };
     },

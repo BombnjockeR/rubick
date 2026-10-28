@@ -12,3 +12,10 @@ Verified 2026-10-27 in headless Chrome (ANGLE Metal, Apple M5) while building `j
 - `THREE.Clock` logs a deprecation warning in r186; use `performance.now()` or `THREE.Timer`.
 - `Kit3D.load` previously resolved URLs against `window.location.href`, which ignores a `<base>` element; it now uses `document.baseURI` (identical for the game pages).
 - Headless Chrome (`--headless=new`) on Apple silicon gets hardware WebGL2 ("ANGLE Metal Renderer: Apple M5"), so screenshots of WebGL pages are real renders. Returning a live three.js object from `Runtime.evaluate` with `returnByValue` fails; coerce to a boolean.
+
+Verified 2026-10-28 while timing strokes to the ball (`js/character.js`, `js/games/racket.js`; measured with the racket-head probe in `_debug().hits`):
+
+- **Where a rigid prop's head is**: a prop skinned 100 % to one bone has every vertex at a fixed point in that bone's frame: `boneInverses[i] · bindMatrix · v` (geometry space → bone space). Its world position is then `bone.matrixWorld · point`, after `bone.updateWorldMatrix(true, false)`. This holds for the meshopt-quantized files too: gltf-transform folds the dequantization into the inverse bind matrices, and `fromBufferAttribute` denormalizes. Averaging the 45 % of vertices furthest from the grip socket gives the racket's string centre or the paddle's blade.
+- **Measuring a clip's pose without disturbing a live character**: keep a hidden clone, `mixer.stopAllAction()`, play only that action at weight 1, `mixer.setTime(t)`, `root.updateMatrixWorld(true)`, read the bones. Cheap enough to do once per character and clip.
+- **One-frame head start**: a clip started in the same frame as the `update(dt)` that advances it is already `dt × timeScale` in when first drawn; a stroke timed to reach its contact frame in `c` seconds must be started with `c + dt`, or it hits ~16–25 ms early (0.2 m of racket travel on a fast swing).
+- **Turning a bone by a world-space rotation q**: `bone.quaternion.premultiply(P⁻¹ · q · P)` with `P` the parent's world quaternion. Used to lift the racket arm about the shoulder after the mixer and the upper-body layer have run.

@@ -1,4 +1,5 @@
-// Browser smoke test: characters, both racket games, the waiting room, the three kitchens, fallbacks, every page.
+// Browser smoke test: characters, both racket games, the waiting room, strokes (smash, dive, early swings,
+// ball flight), the three kitchens, fallbacks, every page.
 //   npm run dev            (in another terminal)
 //   npm run smoke          (or: node tools/smoke.mjs [baseUrl] [--shots dir] [--full])
 // Needs Google Chrome (CHROME=/path/to/chrome to override). Exit code 1 if anything fails.
@@ -30,7 +31,7 @@ async function characters() {
     await p.waitFor(`__viewer.state.char && __viewer.state.char.id === '${id}'`);
     await ev(`__viewer.setTransform([0, 0, 0], 0, 1.8); true`);
     const clips = await ev(`Object.keys(__viewer.state.char.actions).sort().join(',')`);
-    check(`${id}: all 11 clips`, clips === 'defeat,idle,jump,ready,run,serve,strafeL,strafeR,swing,victory,walk', clips);
+    check(`${id}: all 16 clips`, clips === 'defeat,diveL,diveR,idle,jump,lungeL,lungeR,ready,run,serve,smash,strafeL,strafeR,swing,victory,walk', clips);
     const sk = await ev(`(() => { const r = []; __viewer.state.char.model.traverse(o => { if (o.isSkinnedMesh) r.push(o.skeleton.bones.length); }); return r; })()`);
     check(`${id}: skinned meshes bound to the skeleton`, sk.length >= 3 && sk.every((n) => n === 27), JSON.stringify(sk));
     const tools = await ev(`(() => { const c = __viewer.state.char; const v = (k) => c.props[k].every(o => o.visible); const r = [c.tool, v('racket'), v('paddle')]; c.setTool('paddle'); r.push(v('racket'), v('paddle')); c.setTool('racket'); return r; })()`);
@@ -63,6 +64,21 @@ async function characters() {
     check(`${id}: ready stance brings the free hand to the racket`, apart > 0.35 && together < apart * 0.78, `hands ${apart.toFixed(2)} -> ${together.toFixed(2)} m apart`);
     const serve = await ev(`new Promise(res => { const c = __viewer.state.char; c.setReady(1, 'serve'); setTimeout(() => { const t = [__viewer.bonePos('handL')[1] > __viewer.bonePos('chest')[1] + 0.15]; c.setReady(0); c.swing(0.7, 'serve'); const ys = []; const t0 = performance.now(); (function s() { ys.push(__viewer.bonePos('handR')[1] - __viewer.bonePos('chest')[1]); if (performance.now() - t0 < 900) requestAnimationFrame(s); else res([t[0], Math.max(...ys), c.swingT]); })(); }, 400); })`);
     check(`${id}: serve: ball arm up in the trophy pose, racket hand high`, serve[0] && serve[1] > 0.12 && serve[2] === -1, `hand ${serve[1].toFixed(2)} m above the chest`);
+    // Strokes: the racket head where each one meets the ball (scale 1.8, facing +Z, its right = -X)
+    await p.sleep(500);
+    const reach = await ev(`(() => { const r = {}; for (const c of ['swing', 'smash', 'lungeR', 'lungeL', 'diveR', 'diveL']) r[c] = MabarChars.reachOf('${id}', c).map((v) => +(v * 1.8).toFixed(2)); return r; })()`);
+    check(`${id}: strokes reach where they should (forehand right, smash overhead, lunges and dives further out)`,
+      reach.swing[0] < -0.5 && reach.smash[1] > 1.5 && reach.lungeR[0] < reach.swing[0] - 0.15 && reach.lungeL[0] > 0.4 && reach.diveR[0] < reach.swing[0] - 0.15 && reach.diveL[0] > 0.6,
+      JSON.stringify(reach));
+    // the dive: flat on the court mid-clip, head out to the dive side, back on its feet at the end
+    const dive = await ev(`new Promise((res) => { const c = __viewer.state.char; const hat0 = __viewer.bonePos('sockHat'); c.play('diveR', { fade: 0.06 }); const low = []; const t0 = performance.now();
+      (function s() { const t = performance.now() - t0; if (t > 350 && t < 650) { const h = __viewer.bonePos('sockHat'), hp = __viewer.bonePos('hips'); low.push([h[1], h[0] - hp[0]]); }
+        if (t < 1500) requestAnimationFrame(s); else res([hat0[1], Math.max(...low.map((v) => v[0])), Math.max(...low.map((v) => v[1])), Math.abs(__viewer.bonePos('sockHat')[1] - hat0[1]), c.overlay]); })(); })`);
+    await shot(p, `${id}-dive`);
+    check(`${id}: dive lies flat toward the ball and gets back up`, dive[1] < dive[0] * 0.5 && dive[2] < -0.3 && dive[3] < 0.05 && dive[4] === null,
+      `head top ${dive[0].toFixed(2)} -> ${dive[1].toFixed(2)} m, ${(-dive[2]).toFixed(2)} m to its right of the hips`);
+    const tip = await ev(`(() => { const c = __viewer.state.char; return c.toolHead() ? c.toolHead().toArray().map((v) => +v.toFixed(2)) : null; })()`);
+    check(`${id}: toolHead() finds the racket's head`, !!tip, JSON.stringify(tip));
     // Feet keep their grip: move the character and measure how far the planted sole
     // (the lowest centimetre of the lower shoe, skinned vertices) slides.
     for (const [label, fwd, side, stance, most] of [['walk 1.0 m/s', 1.0, 0, 'idle', 0.08], ['run 3.0 m/s', 3.0, 0, 'idle', 0.08], ['side shuffle 0.8 m/s', 0, 0.8, 'ready', 0.25]]) {
@@ -142,6 +158,13 @@ async function match(game, { block = [], expect }) {
   await p.waitFor('__mabar.game._debug().phase === "point"', 60000);
   const pt = await p.eval('__mabar.game._debug().looks.join(",")');
   if (!block.length) check(`${label}: point winner jumps`, /:jump/.test(pt), pt);
+  if (!block.length) {
+    // every return is struck where the racket head is: the gap between the two at the contact moment
+    await p.sleep(12000);
+    const hits = (await p.eval('__mabar.game._debug().hits')).filter((h) => h.ok && h.gap != null);
+    const worst = Math.max(0, ...hits.map((h) => h.gap));
+    check(`${label}: each return is struck at the racket`, hits.length >= 3 && worst < 0.45, `${hits.length} returns, racket head within ${worst.toFixed(2)} m of the ball (${[...new Set(hits.map((h) => h.clip.split('@')[0]))].join(', ')})`);
+  }
   if (FULL && !block.length) {
     await p.waitFor('__mabar.game._debug().phase === "over"', 240000);
     await p.sleep(1200);
@@ -185,7 +208,8 @@ async function room() {
 }
 
 // Swing direction: the keyboard player returns balls with a direction and the shot
-// goes that way (left / right of the player), lifts into a lob or drives a smash.
+// goes that way (left / right of the player), lifts into a lob or drives it flat. The
+// return leaves when the ball reaches the racket, not when the swing comes.
 async function aiming() {
   const p = await b.page(`${BASE}/play.html?game=tennis`);
   await p.waitFor('window.__mabar && __mabar.game && __mabar.game._debug && __mabar.game._debug().views > 0', 30000);
@@ -194,33 +218,105 @@ async function aiming() {
   const r = await p.eval(`new Promise((res) => {
     const hub = __mabar.hub, want = [{ x: -1, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 }];
     const got = [], t0 = performance.now();
-    let i = 0, lastRally = -1;
+    let i = 0, pending = null;
     const timer = setInterval(() => {
       const g = __mabar.game, d = g._debug(), kb = hub.players.get('kb');
       if (!d || !kb) return;
       if (d.phase === 'serve' && d.server === 'Keyboard') g.swing(kb, 0.6, { x: 0, y: 0 });
-      if (d.phase === 'rally' && d.ball && d.ball.receiver === 'Keyboard' && d.ball.u < 0.1 && d.ball.u > 0.02 && d.rally !== lastRally) {
-        lastRally = d.rally;
+      if (pending && d.phase !== 'rally') pending = null;   // missed: next ball
+      if (pending && d.ball && d.ball.hitter === 0 && d.rally > pending.rally) {
+        got.push({ want: pending.w, landY: +d.ball.land.y.toFixed(2), kind: d.ball.kind, held: pending.held });
+        pending = null;
+        i++;
+      }
+      if (!pending && d.phase === 'rally' && d.ball && d.ball.receiver === 'Keyboard' && d.ball.u < 0.1 && d.ball.u > 0.05) {
         const w = want[i % want.length];
         g.swing(kb, w.y < 0 ? 0.95 : 0.6, w);
-        const b2 = g._debug().ball;
-        if (b2 && b2.hitter === 0 && g._debug().rally === lastRally + 1) { got.push({ want: w, landY: +b2.land.y.toFixed(2), kind: b2.kind }); i++; }
+        const after = g._debug().ball;   // still on its way in: struck when it gets to the racket
+        pending = { w, rally: d.rally, held: !!after && after.hitter === 1 };
       }
-      if (got.length >= 8 || performance.now() - t0 > 90000) { clearInterval(timer); res(got); }
+      if (got.length >= 8 || performance.now() - t0 > 100000) { clearInterval(timer); res(got); }
     }, 10);
   })`);
-  const left = r.filter((g) => g.want.x === -1), right = r.filter((g) => g.want.x === 1);
-  const lobs = r.filter((g) => g.want.y === 1), smashes = r.filter((g) => g.want.y === -1);
+  // a dive only pops the ball back and a ball above the head is smashed, whatever the swing
+  const free = r.filter((g) => g.kind !== 'pop' && g.kind !== 'smash');
+  const left = free.filter((g) => g.want.x === -1), right = free.filter((g) => g.want.x === 1);
+  const lobs = free.filter((g) => g.want.y === 1), flats = free.filter((g) => g.want.y === -1);
   // side 0's left is +ny
   check('aiming: a leftward swing sends the ball left, a rightward one right', left.length && right.length && left.every((g) => g.landY > 0.2) && right.every((g) => g.landY < -0.2), JSON.stringify(r));
-  check('aiming: an upward swing lobs, a hard downward one smashes', lobs.length && smashes.length && lobs.every((g) => g.kind === 'lob') && smashes.every((g) => g.kind === 'smash'));
+  check('aiming: an upward swing lobs, a hard downward one drives it flat', lobs.length && flats.length && lobs.every((g) => g.kind === 'lob') && flats.every((g) => g.kind === 'drive'));
+  check('aiming: a swing in time is held until the ball reaches the racket', r.length && r.every((g) => g.held), JSON.stringify(r.map((g) => g.held)));
   check('aiming: no console errors', !p.problems(NET).length, JSON.stringify(p.problems(NET)));
   await p.close();
 }
 
-// Cooking: every kitchen loads with its stations, a keyboard chef cooks one dish per
-// recipe (crates -> board / sink -> pot / fryer -> plate -> hatch) through the test
-// hooks, pots burn and get scraped, orders expire, the shift ends with stars.
+// Strokes on forced shots at the keyboard player (near side): a lob is smashed, a
+// wide ball is dived for, an early swing whiffs instead of returning a ball that is
+// still on its way, and each shot flies like one (lob high, drive low, smash down).
+async function strokes() {
+  const p = await b.page(`${BASE}/play.html?game=tennis`);
+  await p.waitFor('window.__mabar && __mabar.game && __mabar.game._debug && __mabar.game._debug().views > 0', 30000);
+  await p.key('Space');
+  await p.eval('__mabar.game._fastForward(120); true');
+  await p.waitFor('__mabar.game._debug().phase === "serve"', 15000);
+  // place the player, play the shot at them, swing `u` s before it gets there; report what came back
+  const play = async (py, shot, u, dir = { x: 0, y: 0 }, wait = 700) => {
+    await p.eval(`__mabar.game._place(0, ${py}, 1); true`);
+    await p.sleep(300);
+    return p.eval(`new Promise((res) => {
+      const g = __mabar.game, kb = __mabar.hub.players.get('kb');
+      g._place(0, ${py}, 1);
+      const info = g._shot(${JSON.stringify(shot)});
+      let tSwing = 0, at = null;
+      const it = setInterval(() => {
+        const d = g._debug();
+        if (!tSwing && d.ball && d.ball.receiver === 'Keyboard' && d.ball.u <= ${u}) {
+          g.swing(kb, 0.7, ${JSON.stringify(dir)});
+          tSwing = performance.now();
+          at = { hitter: g._debug().ball.hitter, u: d.ball.u };
+        }
+        if (tSwing && performance.now() - tSwing > ${wait}) {
+          clearInterval(it);
+          const e = g._debug();
+          res({ info, at, kind: e.ball && e.ball.kind, hitter: e.ball && e.ball.hitter, phase: e.phase, hit: e.hits[e.hits.length - 1], flight: g._flight(), down: e.players[0].down });
+        }
+      }, 4);
+    })`);
+  };
+  const lob = await play(0, { y: 0.15, depth: 0.92, kind: 'lob', power: 0.5 }, 0.1);
+  const sm = lob.flight[0];
+  check('strokes: a lob is smashed overhead, down into the other court', lob.kind === 'smash' && /^smash/.test(lob.hit.clip) && lob.hit.ok && lob.hit.gap < 0.35 && sm.vh < 1,
+    `${lob.kind}, ${lob.hit.clip} ${lob.hit.gap} m, struck at ${sm.h} m going ${sm.vh} m/s up`);
+  const dive = await play(0.55, { y: -0.9, depth: 0.88, power: 0.9 }, 0.12, { x: 0, y: 0 }, 450);
+  check('strokes: a wide ball is dived for and popped back; the diver is still down', dive.kind === 'pop' && /^dive/.test(dive.hit.clip) && dive.hit.ok && dive.hit.gap < 0.35 && dive.down,
+    `${dive.kind}, ${dive.hit.clip} ${dive.hit.gap} m, down ${dive.down}`);
+  await p.sleep(1500);
+  const early = await play(0, { y: 0.1, depth: 0.85, power: 0.5 }, 0.5, { x: 0, y: 0 }, 250);
+  check('strokes: a swing far too early whiffs; the ball keeps coming', early.at.hitter === 1 && early.hitter === 1, JSON.stringify({ at: early.at, after: early.hitter }));
+  await p.sleep(2500);
+  const lobbed = await play(0, { y: 0.1, depth: 0.85, power: 0.5 }, 0.08, { x: 0, y: 0.9 });
+  const drive = await play(0, { y: 0.1, depth: 0.85, power: 0.5 }, 0.08, { x: 0, y: -0.6 });
+  // apex of the first flight, and what the bounce kept (closed form: gravity + linear drag)
+  const flightOf = (r) => {
+    const [a, c] = r.flight;
+    const e = Math.exp(-a.k * a.dur), gk = a.g / a.k;
+    const vhIn = (a.vh + gk) * e - gk, vIn = Math.hypot(a.vx, a.vz) * e;
+    const ta = a.vh > 0 ? Math.log(1 + (a.k * a.vh) / a.g) / a.k : 0, ea = Math.exp(-a.k * ta);
+    const apex = a.h + (a.vh + gk) * (1 - ea) / a.k - gk * ta;
+    return { apex: +apex.toFixed(2), speed: +Math.hypot(a.vx, a.vz, a.vh).toFixed(1), up: c ? +(c.vh / -vhIn).toFixed(2) : null, on: c ? +(Math.hypot(c.vx, c.vz) / vIn).toFixed(2) : null };
+  };
+  const fl = flightOf(lobbed), fd = flightOf(drive);
+  check('strokes: a lob climbs high and slow, a flat drive stays low and fast', lobbed.kind === 'lob' && drive.kind === 'drive' && fl.apex > 5 && fd.apex < 3 && fd.speed > fl.speed * 1.2,
+    `lob ${JSON.stringify(fl)}, drive ${JSON.stringify(fd)}`);
+  check('strokes: bounces keep about 3/4 of the speed down and along', fd.up > 0.6 && fd.up < 0.85 && fd.on > 0.6 && fd.on < 0.9, JSON.stringify(fd));
+  check('strokes: no console errors', !p.problems(NET).length, JSON.stringify(p.problems(NET)));
+  await p.close();
+}
+
+// Cooking: every kitchen loads with its stations, the kitchen pick shows the three
+// miniatures and takes a choice, a keyboard chef cooks one dish per recipe (crates ->
+// board / sink -> pot / fryer -> plate -> hatch) through the test hooks, pots burn and
+// get scraped, orders expire, the shift ends with stars, the pick's clock picks a kitchen.
 async function cooking() {
   const p = await b.page(`${BASE}/play.html?game=cooking&map=paddy`);
   await p.waitFor('window.__mabar && __mabar.game && __mabar.game._debug && __mabar.game._debug().stations > 0', 40000);
@@ -249,8 +345,20 @@ async function cooking() {
     const s = (${standBy})(at[0], at[1]); g._teleport('kb', s[0], s[1], s[2], s[3]); g._press('kb', ${bit}); return g._debug().chefs[0]; })()`);
   await ev(`__mabar.game._setMap('paddy'); true`);
   await p.waitFor(`__mabar.game._debug().sceneMap === 'paddy'`, 30000);
-  await ev('__mabar.game._fastForward(40); true');            // the room clock runs out: the shift starts
+  await ev('__mabar.game._fastForward(40); true');            // the room clock runs out: the kitchen pick
+  await p.waitFor('__mabar.game._debug().phase === "pick"', 5000);
+  await p.waitFor('__mabar.game._debug().pick && __mabar.game._debug().pick.loaded === 3', 30000);
+  await ev(`__mabar.game._setMap('beach'); true`);            // the highlight moves ...
+  await p.sleep(400);
+  await shot(p, 'cooking-pick');
+  await ev('__mabar.game._press("kb", 2048); true');          // → : the next card
+  const sel2 = (await dbg()).pick.sel;
+  await ev('__mabar.game._press("kb", 1024); __mabar.game._press("kb", 1024); true');   // ← ← : back to the paddy field
+  const pk = (await dbg()).pick;
+  check('cooking: the kitchen pick shows the three kitchens and ← → move the highlight', pk.cards === 3 && pk.loaded === 3 && sel2 === 'city' && pk.sel === 'paddy', JSON.stringify({ sel2, pk }));
+  await ev('__mabar.game._press("kb", 1); true');             // A confirms
   await p.waitFor('__mabar.game._debug().phase === "countdown"', 5000);
+  check('cooking: A confirms the highlighted kitchen', (await dbg()).map === 'paddy' && (await dbg()).sceneMap === 'paddy');
   await ev('__mabar.game._fastForward(4); true');
   await p.waitFor('__mabar.game._debug().phase === "play"', 5000);
   // Tahu Goreng Sambal: tofu -> board (chop) -> fryer; chili -> board (chop); plate both; serve
@@ -304,6 +412,14 @@ async function cooking() {
   await shot(p, 'cooking-over');
   await p.waitFor('__mabar.game._debug().phase === "room"', 20000);
   check('cooking: shift over, back to the room', true);
+  // the pick's clock: with the beach highlighted and nobody confirming, the shift starts there
+  await ev('__mabar.game._fastForward(40); true');
+  await p.waitFor('__mabar.game._debug().phase === "pick"', 5000);
+  await ev(`__mabar.game._setMap('beach'); __mabar.game._fastForward(40); true`);
+  await p.waitFor('__mabar.game._debug().phase === "countdown"', 5000);
+  await p.waitFor(`__mabar.game._debug().sceneMap === 'beach' && __mabar.game._debug().stations > 10`, 30000);
+  d = await dbg();
+  check('cooking: the pick clock takes the highlighted kitchen, whose diorama is back in the scene', d.map === 'beach' && d.env && d.pick === null, JSON.stringify({ map: d.map, env: d.env, stations: d.stations }));
   const fps = await p.eval(`new Promise(res => { let n = 0; const t = performance.now(); (function f() { n++; if (performance.now() - t < 1500) requestAnimationFrame(f); else res(Math.round(n / 1.5)); })(); })`);
   const probs = p.problems(NET);
   check('cooking: no console errors', !probs.length, probs.length ? JSON.stringify(probs) : `${fps} fps`);
@@ -339,6 +455,7 @@ try {
   await run('tennis', () => match('tennis', { expect: 'bunny,dog' }));
   await run('pingpong', () => match('pingpong', { expect: 'bunny,dog' }));
   await run('aiming', aiming);
+  await run('strokes', strokes);
   await run('fallback', () => match('tennis', { block: ['*bunny.glb', '*dog.glb', '*cat.glb', '*panda.glb', '*chimp.glb', '*lioness.glb', '*island_court.glb'], expect: 'chibi,chibi' }));
   await run('cooking', cooking);
   await run('pages', pages);

@@ -12,14 +12,22 @@ from code so they can be tuned and rebuilt.
   defeat   2.0 s  loop  head down, shoulders slumped, ears drooping
   swing    0.5 s  once  forehand; frame 0 is the racket-back pose held as the ball comes
   serve    0.7 s  once  overhead serve; frame 0 is the trophy pose (ball tossed, racket back)
+  smash    0.67 s once  overhead smash with a hop, full body
+  lungeL/R 0.6 s  once  wide side step, racket at full stretch (left: backhand), full body
+  diveL/R  1.1 s  once  full-length dive, belly landing and slide, back up, full body
 
-Clips run in place: the game moves and turns the character. Loops start and
-end on the same pose; one-shots start and end close to idle so cross-fades
-are short. Angles are degrees about the body axes described in rig.py.
+Clips run in place: the game moves and turns the character (it also flies a
+diving character sideways). Loops start and end on the same pose; one-shots
+start and end close to idle so cross-fades are short. Angles are degrees about
+the body axes described in rig.py.
 """
 import math
 
 TAU = math.tau
+
+# Frame (30 fps) where the racket meets the ball in each hitting clip: the game
+# times the clip so this frame lands on the ball (js/character.js CONTACT).
+CONTACT = {'swing': 4, 'serve': 9, 'smash': 7, 'lungeL': 5, 'lungeR': 5, 'diveL': 5, 'diveR': 5}
 
 
 def S(x):
@@ -406,48 +414,69 @@ def defeat(an, t, n=60):
         an.key(f)
 
 
+# Overhead stroke, upper body (the serve and the smash share it): the legs come
+# from the caller (stance() for the serve, a hop for the smash).
+def over_trophy(an, t):   # left arm pointing at the ball, racket cocked behind the head
+    an.rot('spine', pitch=-8, yaw=-12)
+    an.rot('chest', pitch=-6, yaw=-22)
+    an.rot('head', pitch=-30, yaw=16)
+    racket_up(an, arm=(-0.9, 0.25, 0.35), fore=(-0.2, 0.25, 0.95), racket=(-0.05, 0.55, 0.83), normal=(0.17, 0.79, -0.59))
+    an.aim('armL', (0.7, -0.25, 0.67))      # up and out, so the short arm clears the head
+    an.aim('forearmL', (0.45, -0.2, 0.87))
+
+
+def over_drop(an, t):     # racket head dropped behind the back
+    an.rot('spine', pitch=-10, yaw=-6)
+    an.rot('chest', pitch=-8, yaw=-10)
+    an.rot('head', pitch=-32, yaw=8)
+    racket_up(an, arm=(-0.75, 0.15, 0.62), fore=(0.05, 0.55, 0.83), racket=(0.1, 0.45, -0.88), normal=(-0.81, -0.51, -0.28))
+    an.aim('armL', (0.55, -0.6, 0.35))
+    an.aim('forearmL', (0.35, -0.85, 0.2))
+
+
+def over_contact(an, t):  # arm at full stretch above the head
+    an.rot('spine', pitch=-4, yaw=6)
+    an.rot('chest', pitch=-2, yaw=10)
+    an.rot('head', pitch=-28)
+    racket_up(an, arm=(-0.28, -0.32, 0.9), fore=(-0.15, -0.42, 0.9), racket=(-0.1, -0.55, 0.83), normal=(-0.64, 0.70, 0.31))
+    an.aim('armL', (0.45, -0.6, -0.65))
+    an.aim('forearmL', (-0.2, -0.95, 0.2))
+
+
+def over_follow(an, t):   # racket down across the body to the left
+    an.rot('spine', pitch=14, yaw=16)
+    an.rot('chest', pitch=10, yaw=24)
+    an.rot('head', pitch=-12, yaw=-10)
+    racket_up(an, arm=(0.35, -0.75, -0.55), fore=(0.65, -0.35, -0.67), racket=(0.45, 0.25, -0.86), normal=(-0.20, -0.93, -0.30))
+    an.aim('armL', (0.6, 0.1, -0.8))
+    an.aim('forearmL', (0.2, -0.9, -0.4))
+
+
+def keyed(an, snaps, linear=(), after=None):
+    """Key every frame between (frame, snapshot) poses: eased slerps, or linear ones
+    for the stretches that start at a frame in `linear` (a whip through contact, a
+    flight). `after(f)` can adjust each blended pose before it is keyed."""
+    for f in an.frames():
+        i = max(k for k in range(len(snaps)) if snaps[k][0] <= f)
+        j = min(i + 1, len(snaps) - 1)
+        fa, a = snaps[i]
+        fb, b = snaps[j]
+        u = 0.0 if fb == fa else (f - fa) / (fb - fa)
+        an.blend(a, b, u if fa in linear else ease(u))
+        if after:
+            after(f)
+        an.key(f)
+
+
 def serve(an, t, n=21):
     """Overhead serve, upper body. Frame 0 (held while the ball is up): the trophy
     pose, left arm pointing at the tossed ball, racket cocked behind the head."""
     an.begin('serve', n, loop=False)
-
-    def trophy():
-        stance(an, t, width=7, bend=18)
-        an.rot('spine', pitch=-8, yaw=-12)
-        an.rot('chest', pitch=-6, yaw=-22)
-        an.rot('head', pitch=-30, yaw=16)
-        racket_up(an, arm=(-0.9, 0.25, 0.35), fore=(-0.2, 0.25, 0.95), racket=(-0.05, 0.55, 0.83), normal=(0.17, 0.79, -0.59))
-        an.aim('armL', (0.7, -0.25, 0.67))      # up and out, so the short arm clears the head
-        an.aim('forearmL', (0.45, -0.2, 0.87))
-
-    def drop():
-        stance(an, t, width=7, bend=22)
-        an.rot('spine', pitch=-10, yaw=-6)
-        an.rot('chest', pitch=-8, yaw=-10)
-        an.rot('head', pitch=-32, yaw=8)
-        racket_up(an, arm=(-0.75, 0.15, 0.62), fore=(0.05, 0.55, 0.83), racket=(0.1, 0.45, -0.88), normal=(-0.81, -0.51, -0.28))
-        an.aim('armL', (0.55, -0.6, 0.35))
-        an.aim('forearmL', (0.35, -0.85, 0.2))
-
-    def contact():
-        stance(an, t, width=7, bend=10)
-        an.rot('spine', pitch=-4, yaw=6)
-        an.rot('chest', pitch=-2, yaw=10)
-        an.rot('head', pitch=-28)
-        racket_up(an, arm=(-0.28, -0.32, 0.9), fore=(-0.15, -0.42, 0.9), racket=(-0.1, -0.55, 0.83), normal=(-0.64, 0.70, 0.31))
-        an.aim('armL', (0.45, -0.6, -0.65))
-        an.aim('forearmL', (-0.2, -0.95, 0.2))
-
-    def follow():
-        stance(an, t, width=8, bend=20)
-        an.rot('spine', pitch=14, yaw=16)
-        an.rot('chest', pitch=10, yaw=24)
-        an.rot('head', pitch=-12, yaw=-10)
-        racket_up(an, arm=(0.35, -0.75, -0.55), fore=(0.65, -0.35, -0.67), racket=(0.45, 0.25, -0.86), normal=(-0.20, -0.93, -0.30))
-        an.aim('armL', (0.6, 0.1, -0.8))
-        an.aim('forearmL', (0.2, -0.9, -0.4))
-
-    poses = [(0, trophy), (5, drop), (9, contact), (15, follow), (21, lambda: stance(an, t))]
+    poses = [(0, lambda: (stance(an, t, width=7, bend=18), over_trophy(an, t))),
+             (5, lambda: (stance(an, t, width=7, bend=22), over_drop(an, t))),
+             (9, lambda: (stance(an, t, width=7, bend=10), over_contact(an, t))),
+             (15, lambda: (stance(an, t, width=8, bend=20), over_follow(an, t))),
+             (21, lambda: stance(an, t))]
     snaps = []
     for fr, build in poses:
         an.rest()
@@ -455,14 +484,282 @@ def serve(an, t, n=21):
         ears(an, t, back=10 if fr in (9, 15) else 2, tip=8 if fr == 9 else 0)
         an.ground()
         snaps.append((fr, an.snapshot()))
-    for f in an.frames():
-        i = max(k for k in range(len(snaps)) if snaps[k][0] <= f)
-        j = min(i + 1, len(snaps) - 1)
-        fa, a = snaps[i]
-        fb, b = snaps[j]
-        u = 0.0 if fb == fa else (f - fa) / (fb - fa)
-        an.blend(a, b, ease(u))
-        an.key(f)
+    keyed(an, snaps)
+
+
+def smash(an, t, n=20):
+    """Overhead smash on a high ball: from the trophy pose (held while the ball comes
+    down, like the serve's) a short hop, the racket dropping behind the back on the
+    way up, contact at full stretch at the top of the hop, the racket whipping down
+    across the body, a scissor-kick landing."""
+    an.begin('smash', n, loop=False)
+    poses = [  # (frame, legs and upper body, lift of the lowest sole above the court)
+        (0, lambda: (stance(an, t, width=7, bend=26), over_trophy(an, t)), 0.0),
+        (4, lambda: (legs_bent(an, 6, 8, toes=24), over_drop(an, t)), 0.035),
+        (7, lambda: (legs_bent(an, 14, 30, toes=14), over_contact(an, t)), 0.11),
+        (11, lambda: (scissor(an, 34, 18), over_follow(an, t)), 0.05),
+        (14, lambda: (legs_bent(an, 40, 70), over_follow(an, t), an.rot('spine', pitch=6)), 0.0),
+        (20, lambda: stance(an, t), 0.0),
+    ]
+    snaps = []
+    for fr, build, lift in poses:
+        an.rest()
+        build()
+        ears(an, t, back=16 if fr in (7, 11) else 4, tip=12 if fr == 7 else 0)
+        tail(an, t, up=14 if fr in (4, 7, 11) else 0)
+        an.ground(lift=lift)
+        snaps.append((fr, an.snapshot()))
+    keyed(an, snaps, linear=(4, 7))
+
+
+def scissor(an, front, back):
+    """Legs split in the air: the right knee driven up in front, the left leg back."""
+    an.rot('thighR', pitch=-front)
+    an.rot('shinR', pitch=front * 1.6)
+    an.rot('footR', pitch=front - front * 1.6)
+    an.rot('thighL', pitch=back)
+    an.rot('shinL', pitch=back * 1.5)
+    an.rot('footL', pitch=-back - back * 1.5 + 20)
+
+
+def lowest(an):
+    """Lowest point of the posed body mesh (armature space z): what touches the court
+    when the character is not on its feet."""
+    import bpy
+    import numpy as np
+    bpy.context.view_layer.update()
+    dg = bpy.context.evaluated_depsgraph_get()
+    lo = None
+    for o in an.rig.children:
+        if o.type != 'MESH' or not o.name.endswith('_body'):
+            continue
+        ev = o.evaluated_get(dg)
+        me = ev.to_mesh()
+        co = np.empty(len(me.vertices) * 3)
+        me.vertices.foreach_get('co', co)
+        M = np.array(ev.matrix_world)
+        z = co.reshape(-1, 3) @ M[2, :3] + M[2, 3]
+        lo = z.min() if lo is None else min(lo, z.min())
+        ev.to_mesh_clear()
+    return lo
+
+
+def floor(an, lift=0.0):
+    """Like Anim.ground, but for any pose: the lowest point of the body touches the court."""
+    an.move('hips', z=lift - lowest(an))
+
+
+def lay(an, sgn, roll, pitch):
+    """Tip the whole body toward its left (sgn 1) or right (-1): `roll` degrees sideways
+    (90: lying along the court's width), then `pitch` degrees about that line (90: belly
+    down)."""
+    an.rot('hips', side=sgn * roll)
+    an.rot('hips', pitch=pitch)
+
+
+def lunge(an, t, d, n=18):
+    """Wide side step to a ball out of normal reach, to the character's left (d='L',
+    backhand) or right (d='R', forehand): the lead foot steps out and that knee bends
+    deep, the trail leg stays planted and straight, the body leans after the racket at
+    full stretch, then pushes back to the middle. The body shift is in the clip (the
+    game leaves the character where it stands)."""
+    from mathutils import Vector
+    rest = leg_rest(an)
+    an.begin('lunge' + d, n, loop=False)
+    sgn = 1 if d == 'L' else -1
+    trail = 'R' if d == 'L' else 'L'
+    fore = d == 'R'
+
+    def legs(shift, drop, step, lift=0.0):
+        an.move('hips', x=sgn * shift, z=-drop)
+        for s, (dx, dz) in ((d, (sgn * step, lift)), (trail, (-sgn * 0.02, 0.0))):
+            out = 1 if s == 'L' else -1
+            an.reach('thigh' + s, 'shin' + s, rest['ankle'][s] + Vector((dx, -0.01, dz)), pole=(0.35 * out, -1.0, 0.0))
+            an.level('foot' + s)
+
+    def arm(phase):
+        """Racket arm: 'back', 'contact' or 'follow'; forehand to the right, backhand to the left."""
+        if fore:
+            if phase == 'back':
+                racket_up(an, arm=(-0.55, 0.6, -0.35), fore=(-0.4, 0.8, 0.1), racket=(-0.3, 0.5, 0.8), normal=(0.96, 0.02, 0.27))
+            elif phase == 'contact':
+                racket_up(an, arm=(-0.96, -0.15, -0.2), fore=(-0.9, -0.38, -0.15), racket=(-0.9, -0.35, 0.25), normal=(-0.3, 0.92, 0.2))
+            else:
+                racket_up(an, arm=(0.2, -0.85, 0.35), fore=(0.7, -0.2, 0.55), racket=(0.5, 0.35, 0.8), normal=(0.01, -0.53, 0.85))
+        else:
+            if phase == 'back':   # racket taken back past the left hip
+                racket_up(an, arm=(0.35, 0.2, -0.9), fore=(0.6, 0.65, -0.2), racket=(0.45, 0.6, 0.65), normal=(-0.2, 0.3, -0.9))
+            elif phase == 'contact':   # right arm across the chest, reaching left
+                racket_up(an, arm=(0.84, -0.47, -0.25), fore=(0.9, -0.33, -0.15), racket=(0.9, -0.3, 0.3), normal=(0.25, -0.95, 0.1))
+            else:
+                racket_up(an, arm=(0.7, -0.3, 0.55), fore=(0.45, 0.2, 0.85), racket=(0.2, 0.3, 0.92), normal=(0.3, -0.9, 0.2))
+
+    def free_arm(out):
+        if t.pocket:
+            an.rot('armL', pitch=-4)
+        else:   # balances the stretch: out to the other side
+            an.aim('armL', (0.55 + 0.3 * out, 0.1, -0.75))
+            an.aim('forearmL', (0.5 + 0.3 * out, -0.4, -0.6))
+
+    def step():
+        stance(an, t, legs=False)
+        legs(0.08, 0.035, 0.18, lift=0.05)
+        an.rot('spine', side=-sgn * 6)
+        an.rot('chest', yaw=sgn * 14 if not fore else -12)
+        arm('back')
+        free_arm(0.5)
+
+    def reach():
+        stance(an, t, legs=False)
+        an.rot('hips', side=-sgn * 8)     # before the legs: they are placed from the posed hips
+        legs(0.2, 0.09, 0.38)
+        an.rot('spine', side=-sgn * 16, pitch=8)
+        an.rot('chest', side=-sgn * 8, pitch=6, yaw=sgn * 22 if not fore else 0)
+        an.rot('head', yaw=sgn * 12, pitch=-6)
+        arm('contact')
+        free_arm(1.0)
+
+    def follow():
+        stance(an, t, legs=False)
+        legs(0.17, 0.08, 0.38)
+        an.rot('spine', side=-sgn * 8, pitch=4)
+        an.rot('chest', yaw=-sgn * 10 if not fore else 26)
+        arm('follow')
+        free_arm(0.6)
+
+    def push():
+        stance(an, t, legs=False)
+        legs(0.05, 0.03, 0.12, lift=0.03)
+        arm('follow')
+        free_arm(0.3)
+
+    poses = [(0, lambda: stance(an, t)), (3, step), (5, reach), (9, follow), (13, push), (18, lambda: stance(an, t))]
+    snaps = []
+    for fr, build in poses:
+        an.rest()
+        build()
+        ears(an, t, back=10 if fr in (5, 9) else 2, out=sgn * 6 if fr == 5 else 0, tip=8 if fr == 5 else 0)
+        tail(an, t, wag=-sgn * 12 if fr in (3, 5) else 0, up=6)
+        if fr in (0, 18):
+            an.ground()
+        snaps.append((fr, an.snapshot()))
+    keyed(an, snaps, linear=(3, 5))
+
+
+def dive(an, t, d, n=33):
+    """Full-length dive for a ball out of reach, to the character's left (d='L',
+    backhand) or right (d='R', forehand), after tennis-game footage: a push-off,
+    ~6 frames in the air with the racket arm stretched out ahead of the head, a belly
+    landing that slides, ~0.3 s on the ground, a quick push back up. The game flies the
+    character sideways while it is in the air (frames 2-11)."""
+    an.begin('dive' + d, n, loop=False)
+    sgn = 1 if d == 'L' else -1
+    fore = d == 'R'
+    face = (0.0, 1.0, 0.0) if fore else (0.0, -1.0, 0.0)    # back of the fist: away from the net on a forehand
+
+    def racket(phase):
+        if phase == 'back':
+            racket_up(an, arm=(sgn * 0.55, 0.45, 0.35), fore=(sgn * 0.45, 0.6, 0.4), racket=(sgn * 0.25, 0.65, 0.7), normal=face)
+        elif phase == 'contact':
+            racket_up(an, arm=(sgn * 0.92, -0.25, 0.2), fore=(sgn * 0.9, -0.3, 0.25), racket=(sgn * 0.75, -0.45, 0.45), normal=face)
+        elif phase == 'follow':
+            racket_up(an, arm=(sgn * 0.6, -0.65, 0.35), fore=(sgn * 0.45, -0.75, 0.45), racket=(sgn * 0.2, -0.8, 0.55), normal=face)
+        else:   # on the ground: arm out ahead, racket flat
+            racket_up(an, arm=(sgn * 0.95, -0.25, -0.15), fore=(sgn * 0.95, -0.3, -0.05), racket=(sgn * 0.9, -0.4, 0.05), normal=(0.0, 0.0, 1.0))
+
+    def free(ahead, down):
+        if t.pocket:
+            an.rot('armL', pitch=-10)
+            return
+        an.aim('armL', (sgn * ahead, -0.2, -down))
+        an.aim('forearmL', (sgn * ahead, -0.35, -down * 0.8))
+
+    def legs_flying(knee, kick=0.0):
+        for leg, k in (('L', knee), ('R', knee + kick)):
+            an.rot('thigh' + leg, pitch=12, side=(4 if leg == 'L' else -4))
+            an.rot('shin' + leg, pitch=k)
+            an.rot('foot' + leg, pitch=28)
+
+    def start():
+        stance(an, t)
+        an.rot('hips', side=sgn * 8)
+        racket('back')
+
+    def launch():   # pushing off the far foot, body tipping over toward the ball
+        legs_bent(an, 20, 30, toes=20)
+        an.rot('thigh' + ('R' if sgn > 0 else 'L'), pitch=-30)   # near knee drives across
+        lay(an, sgn, 40, 25)
+        an.rot('head', pitch=-20)
+        racket('back')
+        free(0.6, 0.3)
+
+    def contact():
+        lay(an, sgn, 88, 76)
+        an.rot('spine', pitch=-6)
+        an.rot('chest', pitch=-6)
+        an.rot('head', pitch=-38)
+        legs_flying(30, 20)
+        racket('contact')
+        free(0.75, 0.55)
+
+    def follow():
+        lay(an, sgn, 90, 82)
+        an.rot('head', pitch=-34)
+        legs_flying(40, 15)
+        racket('follow')
+        free(0.8, 0.6)
+
+    def landed(head=-26, knee=24):
+        lay(an, sgn, 90, 88)
+        an.rot('spine', pitch=-4)
+        an.rot('head', pitch=head)
+        legs_flying(knee)
+        racket('ground')
+        free(0.85, 0.35)
+
+    def push_up():   # free hand and knees under the body
+        lay(an, sgn, 55, 55)
+        an.rot('head', pitch=-30)
+        legs_bent(an, 75, 120)
+        racket('ground')
+        free(0.3, 0.9)
+
+    def crouch():
+        lay(an, sgn, 14, 18)
+        legs_bent(an, 48, 86)
+        an.rot('head', pitch=-12)
+        racket('follow')
+        free(0.2, 0.8)
+
+    poses = [  # (frame, pose, what meets the court: the feet, the body, or nothing (in the air))
+        (0, start, 'feet'),
+        (2, launch, 'feet'),
+        (5, contact, 'air'),
+        (8, follow, 'air'),
+        (11, landed, 'body'),
+        (14, lambda: landed(-18, 16), 'body'),
+        (22, lambda: landed(-22, 14), 'body'),
+        (26, push_up, 'body'),
+        (29, crouch, 'feet'),
+        (33, lambda: stance(an, t), 'feet'),
+    ]
+    snaps = []
+    for fr, build, meet in poses:
+        an.rest()
+        build()
+        ears(an, t, back=28 if 2 <= fr <= 11 else 6, tip=14 if 2 <= fr <= 11 else 4, out=4)
+        tail(an, t, up=20 if 2 <= fr <= 11 else 4)
+        if meet == 'feet':
+            an.ground()
+        elif meet == 'body':
+            floor(an)
+        snaps.append((fr, an.snapshot()))
+
+    def flight(f):   # in the air the lowest point of the body follows a parabola, push-off to belly landing
+        if 2 < f < 11:
+            s = (f - 2) / 9
+            floor(an, lift=0.13 * 4 * s * (1 - s))
+    keyed(an, snaps, linear=(2, 5, 8), after=flight)
 
 
 def victory(an, t, n=48):
@@ -562,7 +859,9 @@ def swing(an, t, n=15):
 
 
 ALL = (idle, ready, walk, run, lambda an, t: strafe(an, t, 'L'), lambda an, t: strafe(an, t, 'R'),
-       jump, victory, defeat, swing, serve)
+       jump, victory, defeat, swing, serve, smash,
+       lambda an, t: lunge(an, t, 'L'), lambda an, t: lunge(an, t, 'R'),
+       lambda an, t: dive(an, t, 'L'), lambda an, t: dive(an, t, 'R'))
 
 
 def make_all(an, traits):

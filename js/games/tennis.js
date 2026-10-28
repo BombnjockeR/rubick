@@ -25,13 +25,21 @@ MabarRacket.define({
     onSurface: () => true,
     landMax: 0.958,         // the baseline, as a fraction of `line` (balls past it are long)
     net: 0.914,
+    walls: { x: 9.2, z: 16.9 },   // the grandstands' front rails (art/island.py SIDE_X, END_Y): a ball drops off them
   },
-  arc: { contact: 1.0, peak: 1.75, peak2: 0.9 },
+  // Contact heights above the court until the animals' clips are measured (forehand,
+  // overhead) and how high the serve's toss bobs over the strings.
+  arc: { contact: 0.85, over: 2.0, toss: 0.6 },
   ballR: 0.11, ballColor: '#d7f53b',
-  serveT: 2.0, serveTP: 0.7, shotT: 2.1, shotTP: 0.9, cpuHard: 1.6,
+  // Ball flight (js/games/racket.js "Ball flight"): real gravity, so a slow shot is a
+  // high one; pace = seconds line to line (shotT - power * shotTP).
+  ball: { drag: 0.25, rest: 0.72, keep: 0.72, topspin: 3, lob: [5.5, 8], pop: 3.2, clear: 0.45, smash: 1.5 },
+  serveT: 1.7, serveTP: 0.5, shotT: 1.55, shotTP: 0.6, cpuHard: 1.1,
   reach: 1.0, standBack: 0.3, runSpeed: 4, moveRate: 4,
   crossTime: 1.7,         // seconds to run from sideline to sideline: what makes placement count
-  deepest: 1.18, bounceSpeed: 0.7,
+  step: 0.35,             // the last stretch a stroke closes faster than a run (m)
+  dive: 1.6,              // how far a dive flies (m), for the balls a run and a lunge can't reach
+  deepest: 1.28,          // a player goes back up to ~4 m behind the baseline to let a ball come down
   cam: { back: 8.5, height: 6.3, rise: 0.5, push: 1.0, lookY: 0.2, ahead: -0.12, track: 0.4, follow: 0.4, fov: 50 },
   orbit: [27, 17, 0],
   // Daylight on the island: a gradient sky dome, a strong warm sun with a cooler

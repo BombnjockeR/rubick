@@ -48,6 +48,7 @@
     if (code.length !== R.CODE_LENGTH) { setMsg('Enter the 4-letter code shown on the screen', true); return; }
     const name = nameInput.value.trim().slice(0, 12);
     store.set('mabar.name', name);
+    Motion.preflight(); // iPhone motion permission: must be asked from this tap
     goFullscreen(); // needs the tap gesture, so do it right here
     join(code, name);
   });
@@ -394,14 +395,22 @@
   // the peak window, rotation about that vertical tells left from right (a forehand
   // sweeps counter-clockwise seen from above: dx < 0 = the ball goes left) and the
   // acceleration along it tells up from down (dy > 0 = lifted, a lob; < 0 = driven
-  // down, a smash). Tilting the phone forward or back from how it was held moves the
+  // down, flat and fast). Tilting the phone forward or back from how it was held moves the
   // player closer to the net or deeper (sent as the stick's y).
   // Browsers disagree on the sign of the acceleration values (older iOS reports them
   // the other way round); holding the phone upright like a paddle settles it: the
   // screen's top is up, so gravity's reported y says which convention this is.
+  //
+  // Why the sensors can stay silent, and what the phone says about it: the page is
+  // plain http:// (every browser keeps motion off there), an iPhone that was never
+  // asked (requestPermission must come from a tap; we ask at the Join tap and again
+  // from the "Enable motion" button), a Chromium phone with motion sensors blocked
+  // for the site, or a browser without sensor events at all. The small readout under
+  // the meter shows what arrives (gyro / accelerometer, rate, peaks) so a real-device
+  // test can tell detection from thresholds.
   const Motion = (() => {
-    const GYRO_TH = 260;     // deg/s that counts as a swing
-    const ACC_TH = 14;       // m/s² of linear acceleration that counts as a swing
+    const GYRO_TH = 220;     // deg/s that counts as a swing
+    const ACC_TH = 12;       // m/s² of linear acceleration that counts as a swing
     const GYRO_FULL = 1100;  // deg/s for a full-power swing
     const ACC_FULL = 32;     // m/s² for a full-power swing
     const PEAK_WINDOW = 70;  // ms to look for the peak after the swing starts
@@ -414,9 +423,13 @@
     const meter = $('#mMeter');
     const paddle = $('#mPaddle');
     const status = $('#mStatus');
+    const sense = $('#mSense');
     const last = $('#mLast');
     const btn = $('#motionBtn');
     let listening = false, gotData = false;
+    let permission = '';     // iPhone: '' (not asked), 'asked', 'granted', 'denied' or 'error'
+    const has = { gyro: false, accel: false, gravity: false };   // what this phone reports
+    let events = 0, hz = 0, peakGyro = 0, peakAcc = 0;          // for the readout
     let swinging = false, swingStart = 0, peak = 0, coolUntil = 0, level = 0;
     let gravity = null;      // low-passed reading of gravity in phone axes
     let inverted = false;    // this browser reports acceleration the other way round
@@ -425,16 +438,52 @@
 
     const needsPermission = () =>
       typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function';
+    const secure = () => window.isSecureContext !== false;
+
+    // iPhones hand out motion data only after requestPermission() from a tap. The
+    // Join tap is the one tap every player makes, so ask there: by the time the game
+    // switches to motion the sensors are already running, with no second button to find.
+    function preflight() {
+      if (!needsPermission() || permission || !secure()) return;
+      permission = 'asked';
+      ask();
+    }
+    function ask() {
+      let p;
+      try { p = DeviceMotionEvent.requestPermission(); } catch (e) { p = Promise.reject(e); }
+      return Promise.resolve(p).then((res) => {
+        permission = res === 'granted' ? 'granted' : 'denied';
+        if (permission === 'granted') start();
+        else if (mode === 'motion') blocked();
+        return permission;
+      }).catch(() => {
+        permission = 'error';
+        if (mode === 'motion') blocked();
+        return permission;
+      });
+    }
+    function blocked() {
+      btn.hidden = false;
+      status.textContent = permission === 'denied'
+        ? 'Motion was blocked. Reload this page and allow motion, or use the tap area below'
+        : 'Couldn’t turn on motion — tap “Enable motion” to try again, or use the tap area below';
+    }
 
     function prepare() {
-      if (listening) return;
+      if (listening) { report(); if (!gotData) noDataSoon(); return; }
       if (typeof DeviceMotionEvent === 'undefined') {
-        status.textContent = 'No motion sensor here — use the tap area below';
+        status.textContent = 'No motion sensor in this browser — use the tap area below';
+        return;
+      }
+      if (!secure()) {
+        // http:// on the local network (npm run dev): browsers keep the sensors off.
+        status.textContent = 'Motion needs a secure page: open the https:// address — or use the tap area below';
         return;
       }
       if (needsPermission()) {
-        // iPhone: must be asked from a tap.
-        btn.hidden = false;
+        if (permission === 'denied' || permission === 'error') { blocked(); return; }
+        if (permission === 'asked') { status.textContent = 'Allow motion in the prompt so the game can feel your swing'; return; }
+        btn.hidden = false;   // iPhone that skipped the prompt: must be asked from a tap
         status.textContent = 'Tap “Enable motion” so the game can feel your swing';
         return;
       }
@@ -442,36 +491,55 @@
     }
 
     function start() {
+      if (listening) return;
       window.addEventListener('devicemotion', onMotion);
       listening = true;
       btn.hidden = true;
       status.textContent = 'Hold your phone like a paddle and swing';
+      checkPolicy();
+      noDataSoon();
+    }
+    function noDataSoon() {
       setTimeout(() => {
-        if (!gotData) status.textContent = 'No motion data from this device — use the tap area below';
+        if (!gotData && mode === 'motion') status.textContent = 'No motion data arrives in this browser. Chrome or Safari over https work best — or use the tap area below';
       }, 2500);
     }
 
-    btn.addEventListener('click', async () => {
-      try {
-        const res = await DeviceMotionEvent.requestPermission();
-        if (res === 'granted') start();
-        else status.textContent = 'Motion was blocked — use the tap area, or allow it in Safari settings';
-      } catch (_) {
-        status.textContent = 'Couldn’t turn on motion — use the tap area below';
+    // Chromium phones can block motion sensors per site (Site settings → Motion sensors).
+    function checkPolicy() {
+      if (!navigator.permissions || !navigator.permissions.query) return;
+      for (const name of ['accelerometer', 'gyroscope']) {
+        try {
+          navigator.permissions.query({ name }).then((r) => {
+            if (r.state === 'denied' && !gotData) status.textContent = 'Motion sensors are blocked for this site in the browser’s site settings — allow them, or use the tap area below';
+          }).catch(() => {});
+        } catch (_) { /* this browser doesn't know the name */ }
       }
-    });
+    }
+
+    btn.addEventListener('click', () => { permission = 'asked'; ask(); });
 
     function onMotion(e) {
       const r = e.rotationRate, a = e.acceleration, g = e.accelerationIncludingGravity;
-      let gyro = 0, acc = 0;
-      if (r && r.alpha != null) gyro = Math.hypot(r.alpha, r.beta || 0, r.gamma || 0);
-      if (a && a.x != null) acc = Math.hypot(a.x, a.y || 0, a.z || 0);
-      else if (g && g.x != null) acc = Math.abs(Math.hypot(g.x, g.y || 0, g.z || 0) - 9.81);
-      if (r && r.alpha != null) gotData = true;
-      if (a && a.x != null) gotData = true;
-      const vec = (a && a.x != null && g && g.x != null && r && r.alpha != null)
-        ? { a: [a.x, a.y || 0, a.z || 0], g: [g.x, g.y || 0, g.z || 0], r: [r.alpha, r.beta || 0, r.gamma || 0] } : null;
-      feed(gyro, acc, vec);
+      const hasR = !!(r && r.alpha != null), hasA = !!(a && a.x != null), hasG = !!(g && g.x != null);
+      if (!(hasR || hasA || hasG)) return;
+      gotData = true;
+      has.gyro = has.gyro || hasR;
+      has.accel = has.accel || hasA;
+      has.gravity = has.gravity || hasG;
+      events++;
+      // Phones without a gyroscope can't tell left from right (the swing goes straight);
+      // without a linear-acceleration reading a jolt still shows in the gravity vector,
+      // so swings are detected from its change in length and aimed up / down from its
+      // change against the resting gravity.
+      const rv = hasR ? [r.alpha, r.beta || 0, r.gamma || 0] : [0, 0, 0];
+      const gv = hasG ? [g.x, g.y || 0, g.z || 0] : null;
+      const av = hasA ? [a.x, a.y || 0, a.z || 0] : (gv && gravity ? gv.map((v, i) => v - gravity[i]) : null);
+      const gyro = hasR ? Math.hypot(rv[0], rv[1], rv[2]) : 0;
+      const acc = hasA ? Math.hypot(av[0], av[1], av[2]) : gv ? Math.abs(Math.hypot(gv[0], gv[1], gv[2]) - 9.81) : 0;
+      peakGyro = Math.max(peakGyro, gyro);
+      peakAcc = Math.max(peakAcc, acc);
+      feed(gyro, acc, gv ? { a: av || [0, 0, 0], g: gv, r: rv } : null);
     }
 
     const dot = (u, v) => u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
@@ -551,11 +619,29 @@
       }
     }
 
-    let shown = '';
+    // What the sensors deliver, for checking a phone: which readings it has, how often,
+    // and the recent peaks next to the thresholds a swing has to beat.
+    function report() {
+      if (!sense) return;
+      if (!gotData) { sense.textContent = listening ? 'Waiting for sensor data…' : ''; return; }
+      const what = [has.gyro ? 'gyro ✓' : 'no gyro', has.accel ? 'accel ✓' : has.gravity ? 'accel (gravity only)' : 'no accel', `${hz} Hz`];
+      sense.textContent = `${what.join(' · ')} · peak ${Math.round(peakGyro)}°/s, ${peakAcc.toFixed(0)} m/s² — a swing needs ${GYRO_TH}°/s or ${ACC_TH} m/s²`;
+    }
+
+    let shown = '', lastReport = 0, lastEvents = 0;
     (function animate() {
       const w = Math.min(100, level * 100).toFixed(0) + '%';
       if (w !== shown && mode === 'motion') { meter.style.width = w; shown = w; }
       level *= 0.93;
+      const now = performance.now();
+      if (now - lastReport > 500) {
+        hz = lastReport ? Math.round((events - lastEvents) * 1000 / (now - lastReport)) : 0;
+        lastEvents = events;
+        lastReport = now;
+        if (mode === 'motion') report();
+        peakGyro *= 0.5;   // the peaks linger a couple of seconds, then fade
+        peakAcc *= 0.5;
+      }
       requestAnimationFrame(animate);
     })();
 
@@ -568,7 +654,7 @@
       fire(0.6, k < 0.33 ? -0.8 : k > 0.67 ? 0.8 : 0, 0);
     });
 
-    return { prepare, feed, state: () => ({ gravity, inverted, tiltBase, tiltY }) };
+    return { prepare, preflight, feed, state: () => ({ listening, gotData, permission, has: { ...has }, hz, gravity, inverted, tiltBase, tiltY }) };
   })();
   window.__motion = Motion; // lets tests inject fake sensor readings: feed(gyro, acc, { a, g, r })
 

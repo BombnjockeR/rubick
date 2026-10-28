@@ -14,14 +14,22 @@
 // WHEN you swing aims the ball (early = to your left, late = to your right and
 // short, way off = out or into the net), HOW HARD sets the speed and depth, the
 // direction the phone moves pulls the ball that way and lifts it (lob) or drives
-// it down (smash), and running into the ball carries it along. Tilting the phone
-// forward or back (or the stick) moves your spot closer to the net or deeper.
+// it flat, and running into the ball carries it along. A ball above your head is
+// smashed. Tilting the phone forward or back (or the stick) moves your spot closer
+// to the net or deeper.
+//
+// The racket only meets the ball where the ball is: a swing in time is held until
+// the ball reaches the racket (the clip is timed so its contact frame lands then).
+// A ball the run can't quite reach is taken with a lunge, one further out with a
+// full-length dive (a weak pop-up back, and you lie on the court for a moment);
+// beyond that the swing misses.
 //
 // World units are meters (three.js, Y up). The court's long axis is Z with the
-// net at z = 0; side 0 plays from -Z, side 1 from +Z. The sim uses normalized
-// coords: nx -1..1 along the court (contact line to contact line), ny -1..1
-// across the playing width. A ball flies to a landing spot, bounces, and hops on
-// to the receiver's contact point; players stand at (py across, px deep).
+// net at z = 0; side 0 plays from -Z, side 1 from +Z. The ball flies in meters
+// under gravity, drag and spin (see "Ball flight"); positions the players aim for
+// use normalized coords: nx -1..1 along the court (contact line to contact line),
+// ny -1..1 across the playing width. Players' spots (py across, px deep) are where
+// their racket meets the ball; the body stands off to the side of it.
 window.MabarRacket = {
   define(cfg) {
     MabarGames.register({
@@ -40,18 +48,22 @@ function createRacketGame(hub, cfg) {
   // ---------- Rules / tuning ----------
   const ROOM_TIME = 60;
   const SEATS = 4;
-  const EARLY_LIMIT = 0.40;  // swing earlier than this (s before contact) = whiff
-  const LATE_LIMIT = -0.16;  // ball is past you after this = missed
-  const IDEAL = 0.08;        // perfect timing (a touch early covers network lag)
+  const EARLY_LIMIT = 0.30;  // swing earlier than this (s before the ball reaches the racket) = whiff
+  const LATE_LIMIT = -0.1;   // the ball is past the racket after this = too late
+  const IDEAL = 0.08;        // perfect timing (a touch early covers the phone's lag)
   const SPAN = 0.24;         // timing distance that maps to full left/right aim
-  const SWING = 0.3;         // swing animation length (s)
-  const G = 9.8;             // the hops after the bounce are real parabolas
+  const SWING = 0.3;         // swing animation length (s), and the least time between two swings
+  const G = 9.8;
 
   const C = cfg.court;       // { line, halfW, halfWDoubles, surface, onSurface(x,z), landMax, net }
-  const A = cfg.arc;         // { contact, peak, peak2 }: heights above the playing surface (m)
+  const A = cfg.arc;         // { contact, over }: default forehand and overhead strike heights above the playing surface (m)
   const DEEPEST = cfg.deepest || 1.25;   // how far behind the contact line (nx) a player takes a ball
+  const K = cfg.characterScale || 1.8;   // animal size: the racket offsets from the clips scale with it
+  const STEP = cfg.step || 0.35;         // the last stretch (m) a swing closes faster than a run
+  const DIVE = cfg.dive || 0;            // how far (m) a dive flies; 0 = no diving in this game
   const CPU_COLORS = ['#ced4da', '#adb5bd'];
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  let clock = 0;             // seconds of play: swing cooldowns, time on the ground
 
   // ---------- State ----------
   let phase = 'room';        // room | intro | serve | rally | point | over
@@ -166,10 +178,15 @@ function createRacketGame(hub, cfg) {
     hub.refreshRoster();
   }
 
+  // hit: the stroke under way ({ at: ball time of contact, clip, R: where the body must
+  // be, ok, ... }); anim: a clip for the 3D side to start; down: clock time until which
+  // a diver stays down; reach: racket-head offsets measured from the clips (3D).
   function makeMember(p, s, i) {
-    return p
-      ? { id: p.id, cpu: false, name: p.name, color: p.color, slot: p.slot, animal: null, lane: 0, py: 0, px: 1, bias: 0, vl: 0, swingT: 0, side: s, vx: 0, run: 0 }
-      : { id: `cpu${s}${i}`, cpu: true, name: 'CPU', color: CPU_COLORS[i % 2], slot: null, animal: null, lane: 0, py: 0, px: 1, bias: 0, vl: 0, swingT: 0, side: s, vx: 0, run: 0 };
+    const m = p
+      ? { id: p.id, cpu: false, name: p.name, color: p.color, slot: p.slot }
+      : { id: `cpu${s}${i}`, cpu: true, name: 'CPU', color: CPU_COLORS[i % 2], slot: null };
+    return Object.assign(m, { animal: null, lane: 0, py: 0, px: 1, bias: 0, vl: 0, swingT: 0, side: s, vx: 0, run: 0,
+      hit: null, anim: null, down: 0, slide: null, leap: null, swingReady: 0, reach: null, chibi: false });
   }
 
   // Which animal a phone plays as: by its seat slot, so it keeps the same one across
@@ -251,7 +268,9 @@ function createRacketGame(hub, cfg) {
     phaseT = 0;
     ball = null;
     cpuPlan = null;
+    pendingServe = null;
     rally = 0;
+    for (const sd of sides) for (const m of sd.members) m.hit = null;
     trailReset();
   }
 
@@ -279,40 +298,255 @@ function createRacketGame(hub, cfg) {
     popups.push({ text, side, color, t: 0, life, scale });
   }
 
-  // ---------- Shots ----------
-  // A shot flies from the hitter's contact point to where it lands (`depth` 0..1 down
-  // the opponent's half, 1 = the baseline / table end; `aimY` across, past ±1 = wide),
-  // bounces, and hops on to the receiver's contact point: the top of the first hop,
-  // or where it comes back down through contact height, but no deeper than DEEPEST.
-  // Horizontal motion is uniform; T is how long line-to-line would take at that speed.
-  function launch(s, m, from, aimY, depth, T, power, { peak = 1, hop = 1, kind = '' } = {}) {
-    const dir = lineN(1 - s);
-    const land = { x: dir * depth * (C.landMax || 1), y: aimY };
-    const v = 2 / T;                                      // nx per second
-    const dx = land.x - from.x, dy = land.y - from.y;
-    const Tb = Math.max(0.12, Math.hypot(dx, dy * halfW() / C.line) / v);
-    const vx = dx / Tb, vy = dy / Tb;
-    const hp = Math.max(A.contact * 0.5, A.peak * peak);  // peak of the flight to the bounce
-    const hb = Math.max(0.02, A.peak2 * hop);             // height of the first hop
-    const Ta = 2 * Math.sqrt(2 * hb / G);
-    const kb = cfg.bounceSpeed || 0.7;                    // speed kept through the bounce
-    let Tc = hb > A.contact ? Ta * (0.5 + 0.5 * Math.sqrt(1 - A.contact / hb)) : Ta * 0.5;
-    const room = (DEEPEST - Math.abs(land.x)) / Math.max(1e-3, Math.abs(vx) * kb);
-    if (room < Tc) Tc = Math.max(0.05, room);             // taken on the rise instead
-    const contact = { x: land.x + vx * kb * Tc, y: land.y + vy * kb * Tc, t: Tb + Tc };
-    let net = false, Tn = 0;                              // height when crossing the net
-    if (from.x * land.x < 0) {
-      const sn = -from.x / dx;
-      Tn = sn * Tb;
-      net = from.h * (1 - sn) + 4 * hp * sn * (1 - sn) < (C.net || 0) + cfg.ballR;
+  // ---------- Ball flight ----------
+  // A shot is a chain of free flights in meters (x across, z along the court, h = the
+  // ball's centre above the playing surface; t0 = when it starts) under gravity and a
+  // light linear air drag, so the ball slows down and comes down steeper than it went
+  // up. Spin pulls the first flight down harder (topspin, g > 9.8) or holds it up
+  // (backspin). A bounce keeps PH.rest of the vertical speed and PH.keep of the
+  // horizontal (more with topspin, less with backspin). All of it is closed form, so
+  // where the receiver will meet the ball and how high it crosses the net are known
+  // the moment it is struck.
+  const PH = Object.assign({
+    drag: 0.25,                      // 1/s
+    rest: 0.72,                      // vertical speed kept through a bounce
+    keep: 0.72,                      // horizontal speed kept through a bounce
+    topspin: 3,                      // m/s² of extra dip on a full-power drive
+    lob: [5.5, 8],                   // top of a lob (m above the surface): a soft lift .. a big one
+    pop: 3,                          // top of a diving player's pop-up
+    clear: 0.45,                     // how far over the net tape an unhurried shot passes (m)
+    smash: 1.5,                      // a smash is this much faster than a drive
+  }, cfg.ball);
+  const RB = cfg.ballR;              // the ball's centre is this high when it touches down
+
+  function fly(sg, t) {
+    const k = sg.k, g = sg.g;
+    if (k < 1e-6) return { x: sg.x + sg.vx * t, z: sg.z + sg.vz * t, h: sg.h + sg.vh * t - 0.5 * g * t * t, vx: sg.vx, vz: sg.vz, vh: sg.vh - g * t };
+    const e = Math.exp(-k * t), f = (1 - e) / k, gk = g / k;
+    return { x: sg.x + sg.vx * f, z: sg.z + sg.vz * f, h: sg.h + (sg.vh + gk) * f - gk * t, vx: sg.vx * e, vz: sg.vz * e, vh: (sg.vh + gk) * e - gk };
+  }
+  const apexT = (sg) => (sg.vh <= 0 || !sg.g ? 0 : sg.k < 1e-6 ? sg.vh / sg.g : Math.log(1 + sg.k * sg.vh / sg.g) / sg.k);
+  const apexH = (sg) => fly(sg, apexT(sg)).h;
+
+  // When the flight passes height h on the way down (not before `from`), or null.
+  function down(sg, h, from = 0) {
+    let a = Math.max(from, apexT(sg));
+    if (!sg.g || fly(sg, a).h < h) return null;
+    let b = a + 0.25;
+    for (let i = 0; i < 12 && fly(sg, b).h >= h; i++) b += b - a;
+    for (let i = 0; i < 36; i++) { const c = (a + b) / 2; if (fly(sg, c).h >= h) a = c; else b = c; }
+    return (a + b) / 2;
+  }
+  // When it passes height h on the way up, or null.
+  function up(sg, h) {
+    const ta = apexT(sg);
+    if (sg.h >= h || fly(sg, ta).h < h) return null;
+    let a = 0, b = ta;
+    for (let i = 0; i < 36; i++) { const c = (a + b) / 2; if (fly(sg, c).h < h) a = c; else b = c; }
+    return (a + b) / 2;
+  }
+
+  // Where a flight comes down: on the playing surface, or past a table's edge, the floor.
+  function landing(sg) {
+    if (sg.floor) { const t = down(sg, RB - C.surface, 1e-4); return t == null ? null : { t, floor: true }; }
+    const t = down(sg, RB, 1e-4);
+    if (t == null) return null;
+    const p = fly(sg, t);
+    if (!C.surface || C.onSurface(p.x, p.z)) return { t, floor: false };
+    const tf = down(sg, RB - C.surface, t);
+    return tf == null ? null : { t: tf, floor: true };
+  }
+
+  function bounce(sg, t, floor, spin) {
+    const s = fly(sg, t);
+    const kv = floor ? 0.5 : PH.rest + (spin > 0 ? 0.04 : spin < 0 ? -0.1 : 0);
+    const kh = floor ? 0.6 : PH.keep + (spin > 0 ? 0.08 : spin < 0 ? -0.12 : 0);
+    return { t0: sg.t0 + t, x: s.x, z: s.z, h: RB - (floor ? C.surface : 0), vx: s.vx * kh, vz: s.vz * kh, vh: -s.vh * kv, g: G, k: PH.drag, floor };
+  }
+
+  // When a flight reaches the venue's walls (C.walls: the stands' rails, |x| and |z| in
+  // meters) before `end`, or null.
+  function wall(sg, end) {
+    const W = C.walls;
+    if (!W) return null;
+    let hit = null;
+    for (const [axis, p, v, lim] of [['x', sg.x, sg.vx, W.x], ['z', sg.z, sg.vz, W.z]]) {
+      if (!lim || Math.abs(p) >= lim || Math.abs(v) < 1e-6) continue;
+      const f = (Math.sign(v) * lim - p) / v;
+      if (sg.k > 1e-6 && sg.k * f >= 1) continue;
+      const t = sg.k < 1e-6 ? f : -Math.log(1 - sg.k * f) / sg.k;
+      if (t < end && (!hit || t < hit.t)) hit = { t, axis };
     }
+    return hit;
+  }
+
+  // The flight, its bounces, and a roll once the hops die down; a ball that reaches
+  // the stands drops off their rail.
+  function chain(first, spin) {
+    const segs = [first];
+    for (let sg = first, i = 0; i < 9; i++) {
+      const L = landing(sg);
+      const w = wall(sg, L ? L.t : 6);
+      if (w) {
+        sg.dur = w.t;
+        const p = fly(sg, w.t);
+        const nx = { t0: sg.t0 + w.t, x: p.x, z: p.z, h: p.h, vx: p.vx * (w.axis === 'x' ? -0.25 : 0.4), vz: p.vz * (w.axis === 'z' ? -0.25 : 0.4), vh: Math.min(0, p.vh) * 0.5, g: G, k: PH.drag, floor: sg.floor };
+        segs.push(nx);
+        sg = nx;
+        continue;
+      }
+      if (!L) break;
+      sg.dur = L.t;
+      const nx = bounce(sg, L.t, L.floor, i ? 0 : spin);
+      segs.push(nx);
+      if (nx.vh < 0.6) { Object.assign(nx, { vh: 0, g: 0, k: 3, roll: true }); break; }
+      sg = nx;
+    }
+    return segs;
+  }
+
+  // The flight from `from` to `to` (both {x, z, h}) that takes T seconds under pull g.
+  function flight(from, to, T, g) {
+    const k = PH.drag, f = k < 1e-6 ? T : (1 - Math.exp(-k * T)) / k;
+    const vh = k < 1e-6 ? (to.h - from.h + 0.5 * g * T * T) / T : (to.h - from.h + (g / k) * T) / f - g / k;
+    return { t0: 0, x: from.x, z: from.z, h: from.h, vx: (to.x - from.x) / f, vz: (to.z - from.z) / f, vh, g, k };
+  }
+
+  // When and how high a flight crosses the net (z = 0), or null if it doesn't.
+  function netCross(sg) {
+    if (sg.z * sg.vz >= 0) return null;
+    const f = -sg.z / sg.vz;
+    if (sg.k > 1e-6 && sg.k * f >= 1) return null;
+    const t = sg.k < 1e-6 ? f : -Math.log(1 - sg.k * f) / sg.k;
+    return { t, h: fly(sg, t).h };
+  }
+
+  // The T between lo and hi where fn(T), rising with T, reaches `want`.
+  function solveT(fn, want, lo, hi) {
+    if (fn(lo) >= want) return lo;
+    if (fn(hi) <= want) return hi;
+    for (let i = 0; i < 40; i++) { const c = (lo + hi) / 2; if (fn(c) < want) lo = c; else hi = c; }
+    return (lo + hi) / 2;
+  }
+
+  // Where the current ball is `t` seconds after it was struck (meters).
+  function ballAt(t) {
+    const segs = ball.segs;
+    let i = segs.length - 1;
+    while (i > 0 && segs[i].t0 > t) i--;
+    return fly(segs[i], Math.max(0, t - segs[i].t0));
+  }
+
+  // ---------- Where the racket meets the ball ----------
+  // Racket-head offset from the body at a clip's contact frame, in the character's own
+  // axes (x = its left, y = up from the floor, z = ahead; meters): measured from the
+  // animal's clips (m.reach, js/character.js reachOf), else rough defaults (the chibis,
+  // or before the 3D has loaded).
+  const CONTACT = (window.MabarChars && MabarChars.CONTACT) || { swing: 0.133, serve: 0.3, smash: 0.233, lungeL: 0.167, lungeR: 0.167, diveL: 0.167, diveR: 0.167 };
+  function off(m, clip) {
+    const r = m && m.reach && m.reach[clip];
+    if (r) return { x: r[0] * K, y: r[1] * K, z: r[2] * K };
+    const side = m && m.chibi ? 1 : -1;            // the chibis hold the racket in the other hand
+    const y = C.surface + A.contact;
+    if (clip === 'smash' || clip === 'serve') return { x: side * cfg.reach * 0.3, y: C.surface + (A.over || A.contact * 2), z: 0.2 };
+    if (/^lunge/.test(clip)) return { x: (clip === 'lungeL' ? 1 : -1) * cfg.reach * 1.6, y: y * 0.8, z: cfg.standBack };
+    if (/^dive/.test(clip)) return { x: (clip === 'diveL' ? 1 : -1) * cfg.reach * 1.5, y: y * 0.8, z: cfg.standBack };
+    return { x: side * cfg.reach, y, z: cfg.standBack };
+  }
+  // ... in world axes for side s (side 1 faces the other way)
+  function offW(m, s, clip) { const o = off(m, clip), k = s === 0 ? 1 : -1; return { x: o.x * k, y: o.y, z: o.z * k }; }
+  const JUMP = 0.12 * K;                                   // a smash jumps this much higher than its clip's own hop
+  const strikeH = (m) => off(m, 'swing').y - C.surface;   // forehand contact height above the playing surface
+  const overH = (m) => off(m, 'smash').y - C.surface + (m && !m.chibi ? JUMP : 0);   // overhead contact height
+
+  // A player's body position (meters) from their spot (where their forehand meets
+  // the ball), and the spot that puts the body at r.
+  function rootOf(m, s) {
+    const o = offW(m, s, 'swing');
+    return { x: toX(m.py) - o.x, z: lineN(s) * C.line * m.px - o.z };
+  }
+  function setRoot(m, s, r) {
+    const o = offW(m, s, 'swing');
+    m.py = (r.x + o.x) / halfW();
+    m.px = (r.z + o.z) / (lineN(s) * C.line);
+  }
+
+  // Could this player's racket get to p (meters) in t seconds at a run?
+  function reachable(m, s, p, t) {
+    if (!m) return false;
+    return Math.hypot(toX(m.py) - p.x, lineN(s) * C.line * m.px - p.z) <= speedLimit() * t * 0.9;
+  }
+
+  // Where the receiver meets the ball: overhead before the bounce (a lob they can get
+  // under), else after the bounce at their forehand height on the way down; if that
+  // would be too deep, overhead while it is still that high, or on the rise; the top of
+  // a bounce that never gets that high. { t: ball time, x, y (normalized), h, kind:
+  // 'over' | 'ground' | 'rise' | 'low' }
+  function contactFor(b, m, s) {
+    const hs = strikeH(m), ho = overH(m), dirN = lineN(s);
+    const deep = (sg, t) => (fly(sg, t).z * dirN) / C.line;
+    const at = (sg, t, kind) => { const p = fly(sg, t); return { t: sg.t0 + t, x: p.z / C.line, y: p.x / halfW(), h: p.h, kind }; };
+    const [f0, s1] = b.segs;
+    if (b.net || !s1) return at(f0, f0.dur || 0, 'ground');
+    if (b.apex >= ho + 1.2) {
+      const t = down(f0, ho);
+      if (t != null && t < f0.dur && deep(f0, t) >= 0.3 && deep(f0, t) <= DEEPEST && reachable(m, s, fly(f0, t), t)) return at(f0, t, 'over');
+    }
+    if (s1.roll) return at(s1, 0, 'low');
+    const ta = apexT(s1), top = fly(s1, ta).h;
+    if (top <= hs) return at(s1, ta, 'low');
+    const td = down(s1, hs);
+    if (deep(s1, td) <= DEEPEST) return at(s1, td, 'ground');
+    if (top >= ho) {
+      const t2 = down(s1, ho);
+      if (t2 != null && deep(s1, t2) <= DEEPEST) return at(s1, t2, 'over');
+      const t3 = up(s1, ho);
+      if (t3 != null) return at(s1, t3, 'over');
+    }
+    const tu = up(s1, hs);
+    if (tu != null) return at(s1, tu, 'rise');
+    // already above the forehand when it bounces (a racket held low, at a table): play it
+    // at the top of the bounce, or where it passes the deepest a player goes if sooner
+    const f = (DEEPEST * C.line * dirN - s1.z) / s1.vz;
+    const tD = !(f > 0) ? ta : s1.k < 1e-6 ? f : s1.k * f < 1 ? -Math.log(1 - s1.k * f) / s1.k : ta;
+    return at(s1, Math.min(ta, tD), 'rise');
+  }
+
+  // ---------- Shots ----------
+  // Strike the ball from `from` (meters) to land `depth` (0..1) down the other half
+  // (1 = the baseline / table end, past 1.02 = long) and `aimY` across (past ±1 =
+  // wide). how: { speed: average m/s (a drive) | apex: how high it goes (a lob, a
+  // pop-up), spin: extra pull (m/s²), clear: at least this far over the net tape (m),
+  // low: exactly this far over it instead (a late hit; below 0 = into the net) }.
+  function strike(s, m, from, aimY, depth, how) {
+    const land = { x: toX(aimY), z: toZ(lineN(1 - s) * depth * (C.landMax || 1)), h: RB };
+    const g = G + (how.spin || 0);
+    const make = (T) => flight(from, land, T, g);
+    const netH = (T) => { const c = netCross(make(T)); return c ? c.h : 99; };
+    const tape = (C.net || 0) + RB;
+    const D = Math.hypot(land.x - from.x, land.z - from.z);
+    let T = how.apex ? solveT((T) => apexH(make(T)), how.apex, 0.15, 8) : Math.max(0.12, D / how.speed);
+    if (how.low != null) T = solveT(netH, tape + how.low, 0.12, T);
+    else if (netH(T) < tape + (how.clear || 0)) T = solveT(netH, tape + (how.clear || 0), T, 8);   // lifted over the net
+    const sg = make(T);
+    const c = netCross(sg);
+    const net = !!c && c.h < tape;
+    let segs;
+    if (net) {   // caught by the net: drops back on the hitter's side
+      sg.dur = c.t;
+      const p = fly(sg, c.t);
+      segs = [sg, ...chain({ t0: c.t, x: p.x, z: -Math.sign(sg.vz) * RB, h: p.h, vx: p.vx * 0.2, vz: -p.vz * 0.1, vh: Math.min(0, p.vh) * 0.3, g: G, k: PH.drag }, 0)];
+    } else segs = chain(sg, how.spin || 0);
     const long = depth > 1.02, wide = Math.abs(aimY) > 1;
-    ball = { from, h0: from.h, land, Tb, vx, vy, hp, hb, kb, contact, t: 0, T, hitter: s, color: m.color,
-      out: long || wide, long, net, Tn, bounced: false, power, kind };
-    ball.receiver = receiverOf(1 - s, contact.y);
+    ball = { segs, t: 0, hitter: s, color: m.color, kind: how.kind || '', power: how.power == null ? 0.5 : how.power,
+      land: { x: land.z / C.line, y: aimY }, Tb: net ? c.t : sg.dur, out: long || wide, long, net, Tn: net ? c.t : 0,
+      bounced: false, apex: apexH(sg), T: (2 * C.line * T) / Math.max(1, D) };
+    ball.receiver = receiverOf(1 - s, aimY);
+    ball.contact = contactFor(ball, ball.receiver, 1 - s);
     cpuPlan = null;
+    for (const sd of sides) for (const mm of sd.members) mm.hit = null;
     if (ball.receiver && ball.receiver.cpu && !ball.out && !net) {
-      const miss = 0.03 + Math.max(0, cfg.cpuHard - T) * 0.5 + rally * 0.01;
+      const miss = 0.03 + Math.max(0, cfg.cpuHard - ball.T) * 0.5 + rally * 0.01;
       cpuPlan = {
         u: IDEAL + (Math.random() - 0.5) * 0.3, miss: Math.random() < miss, power: 0.35 + Math.random() * 0.5,
         dir: { x: (Math.random() - 0.5) * 1.4, y: Math.random() < 0.15 ? 0.7 : (Math.random() - 0.5) * 0.6 },   // now and then a lob
@@ -322,56 +556,81 @@ function createRacketGame(hub, cfg) {
     trailReset();
   }
 
+  // The serve: the server swings, the toss drops onto the strings, struck from there.
+  let pendingServe = null;   // { at: clock time of contact, power, dir }
+  function serveSpot(s, m) {   // where the server's racket meets the toss (meters)
+    const r = rootOf(m, s), o = offW(m, s, 'serve');
+    return { x: r.x + o.x, z: r.z + o.z, h: o.y - C.surface };
+  }
+
+  function serveSwing(s, m, power, dir) {
+    if (pendingServe) return;
+    const lead = 0.1;
+    pendingServe = { at: clock + lead, power, dir };
+    m.anim = { clip: 'serve', from: Math.max(0, CONTACT.serve - lead), contact: lead };
+    m.swingT = SWING;
+  }
+
   function serve(power, dir = { x: 0, y: 0 }) {
     const { s, m } = serverInfo();
-    const tp = tossPos(s, m);   // struck where the toss is, not teleported to the contact point
-    const from = { x: tp.z / C.line, y: tp.x / halfW(), h: tp.y - C.surface };
+    const from = serveSpot(s, m);
     const depth = clamp(0.35 + Math.random() * 0.3 + power * 0.1, 0.3, 0.75);
     const aimY = clamp((Math.random() - 0.5) * 1.3 - dir.x * 0.5, -0.85, 0.85);
-    launch(s, m, from, aimY, depth, cfg.serveT - power * cfg.serveTP, power, { peak: 1.1 - 0.4 * power, hop: 0.8 + 0.5 * power });
+    const pace = cfg.serveT - power * cfg.serveTP;   // seconds line to line
+    strike(s, m, from, aimY, depth, { speed: (2 * C.line) / pace, spin: PH.topspin * 0.4, clear: 0.12, kind: 'serve', power });
     phase = 'rally';
-    m.swingT = SWING;
+    impact(from, m.color, 0.8);
     if (!m.cpu) hub.rumble(hub.players.get(m.id), 25);
   }
 
-  // The return. WHEN you swing aims it (early = your left, late = your right and
-  // short), HOW HARD sets the speed and depth, the phone's swing direction pulls it
-  // left or right and lifts it (lob) or drives it down (smash), and running into the
-  // ball carries it the way you were moving. Very late hits go into the net.
-  function returnShot(s, m, power, u, dir = { x: 0, y: 0 }) {
+  // The return, struck where the racket met the ball. WHEN you swung aims it (early =
+  // your left, late = your right, short and low: very late goes into the net), HOW
+  // HARD sets the pace and depth, the phone's swing direction pulls it left or right
+  // and lifts it into a high lob (up) or flattens it into a fast low drive (down), and
+  // running into the ball carries it along. Taken overhead it is a smash, steep and
+  // fast; from a dive it only pops back up, high, slow and short.
+  function returnShot(s, m, h) {
+    const { power, u, dir, clip } = h;
     const offset = clamp((u - IDEAL) / SPAN, -1, 1);                     // + early, − late
     const late = clamp((IDEAL - u) / (IDEAL - LATE_LIMIT), 0, 1);
     const leftward = offset * 0.85 - dir.x * 0.6 + clamp(m.vl / speedLimit(), -1, 1) * 0.3;   // + = the player's left
-    const aimY = leftSign(s) * leftward * 1.15 + (Math.random() - 0.5) * 0.1;
-    const smash = power > 0.8 && Math.abs(offset) < 0.35 && dir.y < -0.2;
-    const lob = dir.y > 0.45 && !smash;
-    let depth = 0.5 + 0.45 * power + 0.2 * dir.y - 0.4 * late;
-    let peak = 1.3 - 0.7 * power + 0.5 * Math.max(0, dir.y) - 0.6 * late;
-    let hop = 0.7 + 0.6 * power;
-    let T = (cfg.shotT - power * cfg.shotTP) * Math.max(0.72, 1 - rally * 0.025);
-    let kind = '';
-    if (smash) { T *= 0.78; depth += 0.12; peak = 0.55; hop = 1.2; kind = 'smash'; }
-    else if (lob) { T *= 1.3; depth = 0.8 + 0.25 * power; peak = 1.9 + 0.6 * dir.y; hop = 1.4; kind = 'lob'; }
-    const from = { x: ball.contact.x, y: ball.contact.y, h: A.contact };
+    let aimY = leftSign(s) * leftward * 1.15 + (Math.random() - 0.5) * 0.1;
+    const pace = (cfg.shotT - power * cfg.shotTP) * Math.max(0.78, 1 - rally * 0.02);   // seconds line to line
+    const speed = (2 * C.line) / pace;
+    let depth, how, kind;
+    if (clip === 'smash') {
+      kind = 'smash';
+      depth = 0.55 + 0.35 * power;
+      how = { speed: speed * PH.smash, spin: PH.topspin * 0.5, clear: 0.06 };
+    } else if (/^dive/.test(clip)) {
+      kind = 'pop';
+      aimY = aimY * 0.4 + (Math.random() - 0.5) * 0.5;
+      depth = 0.38 + 0.3 * power;
+      how = { apex: PH.pop, spin: -PH.topspin * 0.3, clear: 0.3 };
+    } else if (dir.y > 0.45) {
+      kind = 'lob';
+      depth = 0.82 + 0.16 * power - 0.25 * late;
+      how = { apex: PH.lob[0] + (PH.lob[1] - PH.lob[0]) * clamp((dir.y - 0.45) / 0.55 + power * 0.3, 0, 1), spin: PH.topspin * 0.3, clear: 0.5 };
+    } else {
+      kind = 'drive';
+      const flat = dir.y < -0.3;     // swung through flat: faster and lower, less spin
+      depth = 0.55 + 0.4 * power + 0.12 * Math.max(0, dir.y) - 0.35 * late;
+      how = { speed: speed * (flat ? 1.12 : 1), spin: PH.topspin * (0.35 + 0.65 * power) * (flat ? 0.4 : 1), clear: PH.clear * (1.1 - 0.6 * power) * (flat ? 0.6 : 1) };
+      if (/^lunge/.test(clip)) { aimY += (Math.random() - 0.5) * 0.3; how.speed *= 0.85; how.clear += 0.15; depth -= 0.08; }
+    }
+    if (late > 0.35 && kind !== 'pop') how.low = PH.clear * (1 - (1.6 * (late - 0.35)) / 0.65);   // late: low, then into the net
     rally++;
-    launch(s, m, from, aimY, clamp(depth, 0.12, 1.2), T, power, { peak, hop, kind });
-    m.swingT = SWING;
-    if (!m.cpu) hub.rumble(hub.players.get(m.id), smash ? 80 : 35);
-    if (smash) popup('SMASH!', s, m.color);
-    else if (lob) popup('Lob', s, m.color, 0.7, 0.9);
+    strike(s, m, h.P, aimY, clamp(depth, 0.12, 1.2), { ...how, kind, power });
+    impact(h.P, m.color, kind === 'smash' ? 1.6 : 1);
+    if (!m.cpu) hub.rumble(hub.players.get(m.id), kind === 'smash' ? 80 : 35);
+    if (kind === 'smash') { popup('SMASH!', s, m.color); if (fx) fx.cheer(0.6); }
+    else if (kind === 'pop') popup('What a dive!', s, m.color, 0.9, 0.9);
+    else if (kind === 'lob') popup('Lob', s, m.color, 0.7, 0.9);
     else if (Math.abs(offset) < 0.25 && late < 0.3) popup('Perfect', s, m.color, 0.7);
   }
 
   // Players run at most this fast (m/s): the court's width in cfg.crossTime seconds.
   const speedLimit = () => (2 * halfW()) / (cfg.crossTime || 1.6);
-
-  // Can this player reach the ball at its contact point from where they stand now?
-  function inReach(m, s) {
-    if (!ball) return false;
-    const dy = Math.abs(toX(m.py) - toX(ball.contact.y));
-    const dz = Math.abs(m.px - ball.contact.x * lineN(s)) * C.line;
-    return dy <= cfg.reach * 1.5 && dz <= cfg.reach * 1.9;
-  }
 
   // Remote players see the game as video (~0.15-0.2s behind) and their swing
   // takes half a ping to arrive; judge them on what they actually saw.
@@ -383,20 +642,173 @@ function createRacketGame(hub, cfg) {
     return Math.max(0, Math.min(0.45, 0.18 + oneWay));
   }
 
+  // The least time (s) each stroke needs to get its racket to the ball.
+  const LEAD = { swing: 0.04, serve: 0.1, smash: 0.08, lungeL: 0.08, lungeR: 0.08, diveL: 0.12, diveR: 0.12 };
+
+  // The ball time, not before t0 and close to `prefer`, when the ball is nearest the
+  // heights lo..hi the racket can be at (the height counts more than a few hundredths
+  // of a second).
+  function meetTime(lo, hi, t0, prefer) {
+    let best = Math.max(t0, prefer), cost = Infinity;
+    for (let t = t0; t <= Math.max(t0, prefer + 0.15); t += 0.005) {
+      const h = ballAt(t).h;
+      const c = Math.max(0, lo - h, h - hi) + Math.abs(t - prefer);
+      if (c < cost) { cost = c; best = t; }
+    }
+    return best;
+  }
+  // How far a diver's flight can be raised or lowered to meet the ball (m)
+  const LEAP = [-0.09 * K, 0.25 * K];
+
+  // How high a diver's body is lifted off its clip (m) at clock time t: a dive at a
+  // ball above its racket leaps higher (or skims lower under a low one), most at
+  // contact, back to the clip's own flight by the landing.
+  function leapY(m, t) {
+    const L = m.leap;
+    if (!L || t <= L.t0 || t >= L.tl) return 0;
+    return t <= L.tc ? L.h * Math.sin((Math.PI / 2) * (t - L.t0) / Math.max(1e-3, L.tc - L.t0))
+      : L.h * Math.cos((Math.PI / 2) * (t - L.tc) / Math.max(1e-3, L.tl - L.tc));
+  }
+
+  // A swing in time: how the player gets the racket to the ball (a plain stroke; a
+  // lunge for a ball a step too far; a dive, launched so it flies onto the ball, for
+  // one further out; an overhead for a high ball), struck when the ball arrives. A
+  // swing that comes late takes the ball a little further on.
+  function planHit(s, m, power, u, dir) {
+    const now = ball.t, r0 = rootOf(m, s), vmax = speedLimit();
+    const choose = (at) => {
+      const P = ballAt(at), left = at - now, run = vmax * left;
+      const need = (clip) => {
+        const o = offW(m, s, clip), R = { x: P.x - o.x, z: P.z - o.z };
+        return { clip, R, d: Math.hypot(R.x - r0.x, R.z - r0.z) };
+      };
+      if (ball.contact.kind === 'over' && !m.chibi) {
+        const o = need('smash');
+        return { ...o, P, ok: o.d <= STEP + run };
+      }
+      const f = need('swing');
+      const toLeft = (P.x - r0.x) * (s === 0 ? 1 : -1) > 0;   // the ball is on the player's left
+      const l = need(toLeft ? 'lungeL' : 'lungeR'), dv = need(toLeft ? 'diveL' : 'diveR');
+      const flies = DIVE + Math.max(0, left - CONTACT.diveL) * vmax;   // a run up to the take-off, then the flight
+      const sideways = Math.abs(dv.R.z - r0.z) <= Math.max(0.5, Math.abs(dv.R.x - r0.x) * 0.8);   // dives go sideways, never back
+      if (f.d <= STEP + run || (m.chibi && f.d <= STEP + run + cfg.reach)) return { ...f, P, ok: true };
+      if (m.chibi) return { ...f, P, ok: false };
+      if (l.d <= STEP + run) return { ...l, P, ok: true };
+      if (DIVE && sideways && dv.d <= flies) return { ...dv, P, ok: true };
+      if (DIVE && sideways && dv.d <= flies + DIVE * 0.6) return { ...dv, P, ok: false };   // a dive that falls short
+      return { ...f, P, ok: false };
+    };
+    // Pick the stroke for where the ball will be met, then meet it when it is at that
+    // stroke's racket height (a dive's racket is lower than a forehand's), as near the
+    // contact moment as that allows but no sooner than the stroke can get there.
+    const first = choose(Math.max(now, ball.contact.t));
+    const hc = off(m, first.clip).y - C.surface;
+    const band = /^dive/.test(first.clip) ? LEAP : first.clip === 'smash' ? [0, JUMP * 1.3]
+      : first.clip === 'swing' && !m.chibi ? [-0.12 * K, 0.25 * K] : [0, 0];   // a leap, a jump, a lifted arm
+    const at = meetTime(hc + band[0], hc + band[1], now + LEAD[first.clip], ball.contact.t);
+    const P = ballAt(at), left = at - now, o = offW(m, s, first.clip);
+    const pick = { clip: first.clip, ok: first.ok, R: { x: P.x - o.x, z: P.z - o.z } };
+    // still within the stroke's reach at that moment? (a late one may have let it get away)
+    const d = Math.hypot(pick.R.x - r0.x, pick.R.z - r0.z), run = vmax * left;
+    const most = /^dive/.test(pick.clip) ? DIVE + Math.max(0, left - CONTACT.diveL) * vmax : STEP + run + (m.chibi ? cfg.reach : 0);
+    if (d > most + 0.15) pick.ok = false;
+    const dive = /^dive/.test(pick.clip);
+    m.hit = { at, clip: pick.clip, R: pick.R, ok: pick.ok, power, u, dir, P, launch: dive ? at - CONTACT[pick.clip] : now, started: false, fly: null };
+    m.probe = { P: { x: P.x, y: C.surface + P.h, z: P.z }, at: clock + left, best: Infinity, clip: pick.clip, ok: pick.ok };
+    m.swingT = SWING;
+    if (m.hit.launch <= now) startStroke(s, m);   // a dive in good time waits for its take-off
+  }
+
+  // The stroke's clip starts, timed to the ball; a dive takes off toward where it meets
+  // the ball (or as far as a dive goes). A late swing steps straight into place.
+  function startStroke(s, m) {
+    const h = m.hit;
+    h.started = true;
+    // a forehand lifts (or drops) its racket arm to a ball off its usual contact height
+    const dy = h.clip === 'swing' ? clamp(h.P.h + C.surface - off(m, 'swing').y, -0.12 * K, 0.25 * K) : 0;
+    m.anim = { clip: h.clip, contact: Math.max(0, h.at - ball.t), dy };
+    const r = rootOf(m, s), dx = h.R.x - r.x, dz = h.R.z - r.z, d = Math.hypot(dx, dz) || 1;
+    if (/^dive/.test(h.clip)) {
+      const reach = Math.min(d, DIVE + 0.1);
+      h.fly = { from: r, to: { x: r.x + (dx / d) * reach, z: r.z + (dz / d) * reach }, t0: ball.t };
+      const tc = clock + Math.max(0, h.at - ball.t);
+      m.leap = { t0: clock, tc, tl: tc + 0.2, h: clamp(h.P.h + C.surface - off(m, h.clip).y, LEAP[0], LEAP[1]) };
+    } else {
+      if (h.clip === 'smash') {   // the jump up to a ball above the clip's own reach
+        const tc = clock + Math.max(0, h.at - ball.t);
+        m.leap = { t0: Math.min(clock, tc - 0.12), tc, tl: tc + 0.25, h: clamp(h.P.h + C.surface - off(m, 'smash').y, 0, JUMP * 1.3) };
+      }
+      if (h.ok && h.at - ball.t < 0.05) setRoot(m, s, h.R);
+    }
+  }
+
+  // Closing in for a planned stroke: the body heads for where the stroke needs it
+  // (h.R), arriving as the ball does; the last stretch (a step, a lunge) can be quicker
+  // than a run, and a dive flies the rest of the way once it takes off.
+  function approach(s, m, dt) {
+    const h = m.hit;
+    if (!h.started && ball.t >= h.launch) startStroke(s, m);
+    const r = rootOf(m, s);
+    let next;
+    if (h.fly) {
+      const k = h.at > h.fly.t0 ? clamp((ball.t - h.fly.t0) / (h.at - h.fly.t0), 0, 1) : 1;
+      next = { x: h.fly.from.x + (h.fly.to.x - h.fly.from.x) * k, z: h.fly.from.z + (h.fly.to.z - h.fly.from.z) * k };
+    } else {
+      const dx = h.R.x - r.x, dz = h.R.z - r.z, d = Math.hypot(dx, dz);
+      if (d < 1e-4) { m.vl = 0; return; }
+      const left = Math.max(dt, h.at - ball.t);
+      const v = h.ok && !/^dive/.test(h.clip) ? Math.max(speedLimit(), d / left) : speedLimit();
+      const step = Math.min(d, v * dt);
+      next = { x: r.x + (dx / d) * step, z: r.z + (dz / d) * step };
+    }
+    m.vl = ((next.x - r.x) / Math.max(dt, 1e-3)) * (s === 0 ? 1 : -1);
+    setRoot(m, s, next);
+  }
+
+  // The ball reaches the racket (or where it would have): strike, or miss; then a
+  // diver slides on and stays down a moment, a lunge pushes back, a smash lands.
+  function finishHit(s, m) {
+    const h = m.hit;
+    m.hit = null;
+    // It is a hit if the body got to where this stroke's racket meets the ball.
+    const r = rootOf(m, s);
+    h.ok = Math.hypot(r.x - h.R.x, r.z - h.R.z) <= (m.chibi ? cfg.reach : Math.max(0.18, STEP * 0.7));
+    if (h.ok) {
+      const after = ball.t - h.at;
+      returnShot(s, m, h);
+      ball.t = after;                     // the new flight started at the contact moment
+    } else {
+      popup(/^dive/.test(h.clip) ? 'So close!' : h.clip === 'smash' ? 'Over your head!' : 'Out of reach', s, '#adb5bd', 0.8, 0.85);
+    }
+    if (m.probe) m.probe.ok = h.ok;
+    if (/^dive/.test(h.clip)) {
+      const f = h.fly || { from: r, to: h.R };
+      const dx = f.to.x - f.from.x, dz = f.to.z - f.from.z, d = Math.hypot(dx, dz) || 1;
+      const slide = 0.18 * K;
+      m.slide = { from: r, to: { x: r.x + (dx / d) * slide, z: r.z + (dz / d) * slide }, t0: clock, dur: 0.3 };
+      m.down = clock + 0.85;
+      dusts.push({ at: clock + 0.2, x: m.slide.to.x, z: m.slide.to.z });
+    } else if (/^lunge/.test(h.clip)) m.down = clock + 0.25;
+    else if (h.clip === 'smash') m.down = clock + 0.2;
+  }
+
+  function whiff(m) { m.anim = { clip: 'swing' }; m.swingT = SWING; }
+
   function swingBy(s, m, power, dir) {
-    if (m.swingT <= 0) m.swingT = SWING;
+    if (clock < m.swingReady || clock < m.down) return;     // mid-swing, or down on the court
+    m.swingReady = clock + SWING;
     if (phase === 'serve') {
       const sv = serverInfo();
-      if (sv.m === m && phaseT > 0.35) serve(power, dir);
+      if (sv.m === m && phaseT > 0.35) serveSwing(sv.s, m, power, dir); else whiff(m);
       return;
     }
-    if (phase !== 'rally' || !ball || ball.hitter === s || ball.out || ball.net) return;
-    if (ball.receiver !== m) { popup('Partner’s ball', s, '#adb5bd', 0.6, 0.8); return; }
+    if (phase !== 'rally' || !ball || ball.hitter === s || ball.out || ball.net) { whiff(m); return; }
+    if (ball.receiver !== m) { popup('Partner’s ball', s, '#adb5bd', 0.6, 0.8); whiff(m); return; }
+    if (m.hit) return;
     const u = ball.contact.t - ball.t + lagOf(m);
-    if (u > EARLY_LIMIT) { popup('Too early', s, '#adb5bd', 0.6, 0.8); return; }
-    if (u < LATE_LIMIT) return;
-    if (!inReach(m, s)) { popup('Out of reach', s, '#adb5bd', 0.7, 0.8); return; }
-    returnShot(s, m, power, u, dir);
+    if (u > EARLY_LIMIT) { popup('Too early', s, '#adb5bd', 0.6, 0.8); whiff(m); return; }
+    if (u < LATE_LIMIT) { whiff(m); return; }
+    planHit(s, m, power, u, dir);
   }
 
   function toggleVote(p) {
@@ -406,38 +818,13 @@ function createRacketGame(hub, cfg) {
     hub.refreshRoster();
   }
 
-  // Ball in normalized coords `t` seconds after launch: x, y and h = height above the
-  // playing surface (m). After the bounce it hops on, lower and slower each time.
-  function ballAt(t) {
-    const b = ball;
-    if (b.net && t > b.Tn) {                           // caught by the net: drops at it
-      const sn = b.Tn / b.Tb, d = t - b.Tn;
-      return { x: 0, y: b.from.y + b.vy * b.Tn, h: Math.max(0, b.h0 * (1 - sn) + 4 * b.hp * sn * (1 - sn) - 0.5 * G * d * d) };
-    }
-    if (t <= b.Tb) {
-      const sn = t / b.Tb;
-      return { x: b.from.x + b.vx * t, y: b.from.y + b.vy * t, h: b.h0 * (1 - sn) + 4 * b.hp * sn * (1 - sn) };
-    }
-    let x = b.land.x, y = b.land.y, left = t - b.Tb, hb = b.hb, k = b.kb;
-    for (let i = 0; ; i++) {
-      const Ta = 2 * Math.sqrt(2 * hb / G);
-      if (left <= Ta || i >= 5) {
-        const u = Math.min(left, Ta);
-        return { x: x + b.vx * k * u, y: y + b.vy * k * u, h: 4 * hb * (u / Ta) * (1 - u / Ta) };
-      }
-      x += b.vx * k * Ta; y += b.vy * k * Ta; left -= Ta; hb *= 0.45; k *= 0.8;
-    }
-  }
-  function ballNorm() { return ball ? ballAt(ball.t) : { x: 0, y: 0, h: 0 }; }
-
-  // The server's tossed ball, bobbing over the hitting shoulder (a third of the way
-  // from the body to the contact point, on the racket side).
+  // The server's tossed ball, bobbing over the strings; when the server swings it
+  // comes down onto them.
   function tossPos(s, m) {
-    const o = memberObjs.get(m);
-    const z = toZ(lineN(s));
-    const toss = Math.abs(Math.sin(performance.now() / 300));
-    const x = o ? o.root.position.x + (toX(m.py) - o.root.position.x) * 0.35 : toX(m.py);
-    return { x, y: C.surface + A.contact * (1 + toss * 1.1), z: z + (s === 0 ? 1 : -1) * 0.2 };
+    const P = serveSpot(s, m);
+    let lift = (A.toss || 0.6) * (0.3 + 0.7 * Math.abs(Math.sin(performance.now() / 300)));
+    if (pendingServe) lift *= clamp((pendingServe.at - clock) / 0.1, 0, 1);
+    return { x: P.x, y: C.surface + P.h + lift, z: P.z };
   }
 
   function ballWorld() {
@@ -446,15 +833,8 @@ function createRacketGame(hub, cfg) {
       return tossPos(s, m);
     }
     if (!ball) return null;
-    const n = ballNorm();
-    const x = toX(n.y), z = toZ(n.x);
-    const on = C.onSurface(x, z);
-    let y = C.surface + n.h;
-    if (!on && ball.t > ball.Tb) {                     // past the table's edge: falls to the floor
-      const d = ball.t - ball.Tb;
-      y = C.surface + n.h * 0.3 - 0.5 * G * d * d;
-    }
-    return { x, y: Math.max((on ? C.surface : 0) + cfg.ballR, y), z };
+    const p = ballAt(ball.t);
+    return { x: p.x, y: C.surface + p.h, z: p.z };
   }
 
   // =====================================================================
@@ -470,6 +850,8 @@ function createRacketGame(hub, cfg) {
   const trail = [];
   const memberObjs = new Map(); // member -> { root, tag, ch (animated) | armR, armL, legL, legR, head, phase (chibi) }
   let lastFrame = performance.now();
+  const hitLog = [];            // how close each stroke's racket head came to the ball (_debug, smoke test)
+  const tmpV = new THREE.Vector3(), tmpP = new THREE.Vector3();
 
   function canvasTexture(w, h, paint) {
     const c = document.createElement('canvas');
@@ -478,6 +860,56 @@ function createRacketGame(hub, cfg) {
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     return tex;
+  }
+
+  // A flash where the racket meets the ball, dust where a diver lands.
+  const bursts = [], puffs = [];
+  const dusts = [];             // dust due: { at: clock time, x, z }
+  let glowTex = null;
+  const glow = () => glowTex || (glowTex = canvasTexture(64, 64, (g, w) => {
+    const gr = g.createRadialGradient(w / 2, w / 2, 0, w / 2, w / 2, w / 2);
+    gr.addColorStop(0, 'rgba(255,255,255,1)');
+    gr.addColorStop(0.3, 'rgba(255,255,255,0.75)');
+    gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr;
+    g.fillRect(0, 0, w, w);
+  }));
+  function impact(P, color, size = 1) {
+    if (!scene) return;
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow(), color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    sp.position.set(P.x, C.surface + P.h, P.z);
+    scene.add(sp);
+    bursts.push({ sp, t: 0, life: 0.22, size: size * cfg.ballR * 10 });
+  }
+  function dust(x, z) {
+    if (!scene) return;
+    for (let i = 0; i < 8; i++) {
+      const a = Math.random() * Math.PI * 2, v = 0.4 + Math.random() * 0.8;
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow(), color: cfg.dustColor || '#e9dcc0', transparent: true, depthWrite: false, opacity: 0.7 }));
+      sp.position.set(x + Math.cos(a) * 0.2, C.surface + 0.1, z + Math.sin(a) * 0.2);
+      scene.add(sp);
+      puffs.push({ sp, t: 0, life: 0.55 + Math.random() * 0.3, vx: Math.cos(a) * v, vy: 0.3 + Math.random() * 0.4, vz: Math.sin(a) * v, size: K * 0.18 });
+    }
+  }
+  function updateFx(dt) {
+    for (let i = dusts.length - 1; i >= 0; i--) if (clock >= dusts[i].at) { dust(dusts[i].x, dusts[i].z); dusts.splice(i, 1); }
+    for (const list of [bursts, puffs]) {
+      for (let i = list.length - 1; i >= 0; i--) {
+        const b = list[i];
+        b.t += dt;
+        const k = b.t / b.life;
+        if (k >= 1) { scene.remove(b.sp); b.sp.material.dispose(); list.splice(i, 1); continue; }
+        if (list === bursts) {
+          b.sp.scale.setScalar(b.size * (0.3 + 0.7 * Math.sqrt(k)));
+          b.sp.material.opacity = 1 - k;
+        } else {
+          b.sp.position.x += b.vx * dt; b.sp.position.y += b.vy * dt; b.sp.position.z += b.vz * dt;
+          b.vx *= 1 - dt * 3; b.vz *= 1 - dt * 3;
+          b.sp.scale.setScalar(b.size * (0.6 + k));
+          b.sp.material.opacity = 0.7 * (1 - k);
+        }
+      }
+    }
   }
 
   function setup(env, chars) {
@@ -542,6 +974,15 @@ function createRacketGame(hub, cfg) {
     memberObjs.clear();
   }
 
+  // Each stroke's racket head at its contact frame, from this animal's clips (model
+  // units; off() scales them). A clip missing from an older file falls back to defaults.
+  function reachFor(id) {
+    const clips = { swing: 'swing', serve: cfg.serveClip || 'swing', smash: 'smash', lungeL: 'lungeL', lungeR: 'lungeR', diveL: 'diveL', diveR: 'diveR' };
+    const r = {};
+    for (const [k, clip] of Object.entries(clips)) r[k] = MabarChars.reachOf(id, clip, undefined, cfg.tool || 'racket');
+    return r;
+  }
+
   // Animated character for a member (assignAnimals), or null to use the chibi
   // template: the fallback when no character file loaded. If only this member's
   // file failed, any loaded animal stands in.
@@ -567,7 +1008,8 @@ function createRacketGame(hub, cfg) {
   function celebrate(s, clip) {
     for (const m of sides[s].members) {
       const o = memberObjs.get(m);
-      if (o && o.ch) o.ch.play(clip);
+      // a point hop waits for a diver to get up (the end-of-match clips don't)
+      if (o && o.ch && (clip !== 'jump' || (clock >= m.down && !(o.ch.overlay && /^(dive|lunge|smash)/.test(o.ch.overlay.name))))) o.ch.play(clip);
     }
   }
 
@@ -589,9 +1031,13 @@ function createRacketGame(hub, cfg) {
           const ring = colorRing(m.color);
           ch.root.add(tag, ring);
           scene.add(ch.root);
-          memberObjs.set(m, { root: ch.root, tag, ring, ch, yaw: s === 0 ? 0 : Math.PI, vx: 0, vz: 0, lastX: null, lastZ: null, lastSwing: 0, serving: false });
+          m.chibi = false;
+          m.reach = reachFor(animal);
+          memberObjs.set(m, { root: ch.root, tag, ring, ch, yaw: s === 0 ? 0 : Math.PI, vx: 0, vz: 0, lastX: null, lastZ: null, serving: false });
           continue;
         }
+        m.chibi = true;
+        m.reach = null;
         const root = template.clone(true);
         const color = new THREE.Color(m.color);
         const hair = new THREE.Color(HAIR[(i++ * 3 + s) % HAIR.length]);
@@ -623,60 +1069,80 @@ function createRacketGame(hub, cfg) {
 
   function poseAnimal(m, s, o, dt) {
     const dirZ = lineN(s);
-    // The animals hold the racket in their right hand, the chibis on the other side:
-    // stand so the ball arrives on the forehand.
-    const x = toX(m.py) + (s === 0 ? 1 : -1) * cfg.reach;
-    const z = dirZ * (C.line * m.px + cfg.standBack);
+    // The body stands off the player's spot so the forehand's racket head meets the
+    // ball there (the racket is in the animals' right hand, the chibis' left: off()).
+    const { x, z } = rootOf(m, s);
     const vx = o.lastX == null ? 0 : (x - o.lastX) / Math.max(dt, 1e-3);
     const vz = o.lastZ == null ? 0 : (z - o.lastZ) / Math.max(dt, 1e-3);
     o.lastX = x;
     o.lastZ = z;
     o.vx += (vx - o.vx) * Math.min(1, dt * 10);
     o.vz += (vz - o.vz) * Math.min(1, dt * 10);
-    o.root.position.set(x, 0, z);
+    o.root.position.set(x, leapY(m, clock), z);
     o.ch.setVelocity(o.vx, o.vz);
     o.ch.setStance(phase === 'serve' || phase === 'rally' ? 'ready' : 'idle');
-    // Upper body: racket back as the ball comes, forehand on a swing. The server holds
-    // the first frame of cfg.serveClip ('serve': trophy pose, ball tossed; default
-    // 'swing': racket back) and plays it when the serve goes.
+    // Upper body: racket back as the ball comes, or the trophy pose under a high one.
+    // The server holds the first frame of cfg.serveClip ('serve': trophy pose, ball
+    // tossed; default 'swing': racket back) until the swing.
     const server = phase === 'serve' && serverInfo().m === m;
     const serveClip = cfg.serveClip || 'swing';
-    let ready = 0;
+    let ready = 0, readyClip = 'swing';
     if (phase === 'rally' && ball && ball.receiver === m) {
       const u = ball.contact.t - ball.t;
       ready = Math.max(0, Math.min(1, 1 - (u - 0.1) / 0.6));
+      if (ball.contact.kind === 'over' && serveClip === 'serve') readyClip = 'serve';
     }
-    o.ch.setReady(server ? 1 : ready, server ? serveClip : 'swing');
-    if (m.swingT > o.lastSwing + 1e-6) {
-      if (!o.serving || serveClip === 'swing') o.ch.swing(0.42);
-      else if (phase !== 'serve') o.ch.swing(0.4, serveClip, 6 / 30);   // racket already dropping: contact at once
+    o.ch.setReady(server ? 1 : ready, server ? serveClip : readyClip);
+    // A stroke the sim started, timed so the clip's contact frame lands on the ball.
+    const base = s === 0 ? 0 : Math.PI;
+    if (m.anim) {
+      const a = m.anim;
+      m.anim = null;
+      const c = a.contact == null ? undefined : a.contact + dt;   // update() below already plays this frame
+      if (a.clip === 'serve' && serveClip !== 'swing') o.ch.swing(0.4, serveClip, a.from || 0, c);
+      else if (a.clip === 'swing' || a.clip === 'serve' || !o.ch.has(a.clip)) { o.ch.swing(0.42, 'swing', 0, c); o.ch.raise(a.dy); }
+      else { o.ch.play(a.clip, { fade: 0.06, contact: c }); o.yaw = base; }   // full-body strokes are played square to the net
     }
-    o.lastSwing = m.swingT;
     o.serving = server;
     // Square to the net, shuffling sideways; turn into a run (toward wherever it is
     // going, even back for a lob) only for dashes the shuffle can't keep up with, and
-    // back to the net to hit.
-    const base = s === 0 ? 0 : Math.PI;
+    // back to the net to hit, lunge, dive or smash.
     const lim = o.ch.strafeLimit();
     const speed = Math.hypot(o.vx, o.vz);
     const dash = lim ? clamp((speed - lim * 0.8) / (lim * 0.6), 0, 1) : Math.min(1, speed / cfg.runSpeed);
     const heading = speed > 1e-3 ? Math.atan2(o.vx * (s === 0 ? 1 : -1), o.vz * dirZ) : 0;   // + = the character's left
-    const turn = heading * dash * (1 - ready) * (m.swingT > 0 ? 0 : 1);
+    const stroke = clock < m.down || (m.hit && m.hit.started) || (o.ch.overlay && /^(dive|lunge|smash)/.test(o.ch.overlay.name));
+    const turn = stroke ? 0 : heading * dash * (1 - ready) * (m.swingT > 0 ? 0 : 1);
     const want = base + turn;
     o.yaw += (((want - o.yaw + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI) * Math.min(1, dt * 9);
     o.root.rotation.y = o.yaw;
     const bw = ball && ballWorld();
-    o.ch.look(bw ? Math.max(-0.5, Math.min(0.5, (bw.x - x) * 0.12 * (s === 0 ? 1 : -1))) : 0);
+    o.ch.look(bw && !stroke ? Math.max(-0.5, Math.min(0.5, (bw.x - x) * 0.12 * (s === 0 ? 1 : -1))) : 0);
     o.ch.update(dt);
+    // How close the racket head came to the ball around a stroke's contact moment.
+    const pr = m.probe;
+    if (pr) {
+      if (Math.abs(clock - pr.at) <= 0.05) {
+        const p = o.ch.toolHead(tmpV);
+        if (p) pr.best = Math.min(pr.best, p.distanceTo(tmpP.set(pr.P.x, pr.P.y, pr.P.z)));
+        if (p && pr.best === p.distanceTo(tmpP)) {
+          pr.seen = { root: [o.root.position.x, o.root.position.z].map((v) => +v.toFixed(2)), head: p.toArray().map((v) => +v.toFixed(2)),
+            clip: o.ch.overlay ? `${o.ch.overlay.name}@${o.ch.actions[o.ch.overlay.name].time.toFixed(3)} w${o.ch.overlay.w.toFixed(2)}` : `layer@${o.ch.swingT.toFixed(3)}`, dt: +(clock - pr.at).toFixed(3) };
+        }
+      } else if (clock > pr.at + 0.05) {
+        hitLog.push({ who: m.name, clip: pr.clip, ok: pr.ok, gap: pr.best === Infinity ? null : +pr.best.toFixed(3), P: [pr.P.x, pr.P.y, pr.P.z].map((v) => +v.toFixed(2)), ...(pr.seen || {}) });
+        if (hitLog.length > 60) hitLog.shift();
+        m.probe = null;
+      }
+    }
   }
 
   function poseMember(m, s, o, dt) {
     if (o.ch) { poseAnimal(m, s, o, dt); return; }
-    const dirZ = lineN(s);
     // Stand so the racket (held out to the side) meets the ball.
-    const x = toX(m.py) - (s === 0 ? 1 : -1) * cfg.reach;
+    const { x, z } = rootOf(m, s);
     const prevX = o.root.position.x;
-    o.root.position.set(x, 0, dirZ * (C.line * m.px + cfg.standBack));
+    o.root.position.set(x, 0, z);
     const speed = Math.abs(x - prevX) / Math.max(dt, 1e-3);
     m.run += (Math.min(1, speed / cfg.runSpeed) - m.run) * Math.min(1, dt * 8);
     o.phase += dt * (6 + 8 * m.run);
@@ -717,6 +1183,7 @@ function createRacketGame(hub, cfg) {
       const o = memberObjs.get(m);
       if (o) poseMember(m, s, o, dt);
     }
+    updateFx(dt);
 
     const bw = ballWorld();
     ballMesh.visible = !!bw && phase !== 'room' && phase !== 'over' && phase !== 'intro';
@@ -749,7 +1216,7 @@ function createRacketGame(hub, cfg) {
       const u = ball.contact.t - ball.t;
       if (u < 0.6 && u > LATE_LIMIT) {
         const k = u <= EARLY_LIMIT ? 1 - Math.min(1, Math.abs(u - IDEAL) / 0.3) : 0.15;
-        ring.position.set(toX(ball.contact.y), C.surface + A.contact, toZ(ball.contact.x));
+        ring.position.set(toX(ball.contact.y), C.surface + ball.contact.h, toZ(ball.contact.x));
         ring.rotation.set(0, 0, 0);
         ring.scale.setScalar(1.6 - k * 0.6);
         ring.material.color.set(ball.receiver.color);
@@ -767,7 +1234,8 @@ function createRacketGame(hub, cfg) {
       const near = b ? Math.max(0, Math.min(1, (b.z * dir + C.line) / (2 * C.line))) : 0.3;
       const deep = Math.max(1, ...sides[s].members.map((m) => m.px));
       const want = new THREE.Vector3(bx * cfg.cam.follow, cfg.cam.height + near * cfg.cam.rise, dir * (C.line * deep + cfg.cam.back - near * cfg.cam.push));
-      const look = new THREE.Vector3(bx * cfg.cam.follow * 0.9, cfg.cam.lookY + (b ? (b.y - C.surface) * 0.2 : 0), dir * C.line * (cfg.cam.ahead + near * cfg.cam.track));
+      const by = b ? b.y - C.surface : 0;   // a lob tilts the view up so its top stays in the picture
+      const look = new THREE.Vector3(bx * cfg.cam.follow * 0.9, cfg.cam.lookY + by * 0.2 + Math.max(0, by - 3 * A.contact) * 0.25, dir * C.line * (cfg.cam.ahead + near * cfg.cam.track));
       const st = camState[s];
       if (phase === 'intro') {
         const k = 1 - Math.max(0, phaseT) / 2.6;
@@ -1089,6 +1557,7 @@ function createRacketGame(hub, cfg) {
   // Game interface
   // =====================================================================
   let stopped = false;
+  let slowMo = 1;               // test hook _slow(k): the whole game at k times speed
   const animals = cfg.characters && window.MabarChars
     ? Promise.all(cfg.characters.map((id) => MabarChars.load(id).catch(() => null))) // failure -> chibi
     : Promise.resolve([]);
@@ -1135,7 +1604,7 @@ function createRacketGame(hub, cfg) {
         popup(`AI takes over for ${mm.m.name}`, null, '#adb5bd', 2, 0.8);
         mm.m.name = 'CPU';
         if (!humanSides().length) toRoom();
-        else if (ball && ball.receiver === mm.m && !ball.out) cpuPlan = { u: IDEAL, miss: false, power: 0.5, done: false };
+        else if (ball && ball.receiver === mm.m && !ball.out && !mm.m.hit) cpuPlan = { u: IDEAL, miss: false, power: 0.5, dir: { x: 0, y: 0 }, done: false };
       }
       hub.refreshRoster();
     },
@@ -1196,6 +1665,8 @@ function createRacketGame(hub, cfg) {
     resize() { if (renderer) renderer.setSize(hub.W, hub.H, false); },
 
     update(dt) {
+      dt *= slowMo;
+      clock += dt;
       for (const sd of sides) for (const m of sd.members) m.swingT = Math.max(0, m.swingT - dt);
       for (let i = popups.length - 1; i >= 0; i--) { popups[i].t += dt; if (popups[i].t > popups[i].life) popups.splice(i, 1); }
       if (banner) { banner.t += dt; if (banner.t > banner.life) banner = null; }
@@ -1213,9 +1684,11 @@ function createRacketGame(hub, cfg) {
         if (phaseT <= 0) startServe();
       } else if (phase === 'serve') {
         phaseT += dt;
-        const { m } = serverInfo();
-        if (m.cpu && phaseT > 1.3) serve(0.45 + Math.random() * 0.25);
-        else if (!m.cpu && phaseT > 8) serve(0.35); // auto-serve so nobody stalls
+        const { s, m } = serverInfo();
+        if (pendingServe) {
+          if (clock >= pendingServe.at) { const ps = pendingServe; pendingServe = null; serve(ps.power, ps.dir); }
+        } else if (m.cpu && phaseT > 1.3) serveSwing(s, m, 0.45 + Math.random() * 0.25, { x: 0, y: 0 });
+        else if (!m.cpu && phaseT > 8) serveSwing(s, m, 0.35, { x: 0, y: 0 }); // auto-serve so nobody stalls
       } else if (phase === 'rally' && ball) {
         ball.t += dt;
         const rs = 1 - ball.hitter;
@@ -1225,12 +1698,22 @@ function createRacketGame(hub, cfg) {
           if (ball.out) { point(rs, ball.long ? 'Long!' : 'Out!'); return; }
         }
         const u = ball.contact.t - ball.t;
-        if (cpuPlan && !cpuPlan.done && u <= cpuPlan.u) {
+        // the AI swings at its chosen moment, or in good time when it has to stretch for it
+        const far = (m) => Math.hypot(toX(m.py) - toX(ball.contact.y), lineN(rs) * C.line * m.px - toZ(ball.contact.x)) - speedLimit() * u > STEP;
+        if (cpuPlan && !cpuPlan.done && (u <= cpuPlan.u || (u <= 0.24 && ball.receiver && far(ball.receiver)))) {
           cpuPlan.done = true;
-          if (!cpuPlan.miss && ball.receiver && inReach(ball.receiver, rs)) returnShot(rs, ball.receiver, cpuPlan.power, u, cpuPlan.dir);
-          else if (ball.receiver) ball.receiver.swingT = SWING;
+          const r = ball.receiver;
+          if (r && !r.hit && clock >= r.down) {
+            if (!cpuPlan.miss) planHit(rs, r, cpuPlan.power, u, cpuPlan.dir);
+            else whiff(r);
+          }
         }
-        if (ball && u < LATE_LIMIT - lagOf(ball.receiver)) point(ball.hitter, `${ball.receiver ? ball.receiver.name : 'Someone'} missed`);
+        // Strokes land when the ball gets to the racket (a hit replaces the ball).
+        for (const m of sides[rs].members) {
+          if (m.hit && ball.hitter !== rs && ball.t >= m.hit.at) finishHit(rs, m);
+        }
+        const r = ball.receiver;
+        if (!(r && r.hit) && ball.t > ball.contact.t - LATE_LIMIT + 0.15 + lagOf(r)) point(ball.hitter, `${r ? r.name : 'Someone'} missed`);
       } else if (phase === 'point') {
         if (ball) ball.t += dt;
         phaseT -= dt;
@@ -1257,17 +1740,30 @@ function createRacketGame(hub, cfg) {
       // Players run to where they will meet the ball (the receiver) or back to their
       // spot, no faster than the speed limit, so placement wins points. The phone's
       // tilt (or the stick) moves the spot up to half a court closer to the net or
-      // further back.
+      // further back. A stroke under way steers the body itself (approach); a diver
+      // slides to a stop and stays down a moment.
       const vmax = speedLimit();
       for (let s = 0; s < 2; s++) {
         for (const m of sides[s].members) {
           const p = m.cpu ? null : hub.players.get(m.id);
           const want = p ? -clamp(hub.dir(p).y, -1, 1) : 0;   // + = toward the net
           m.bias += (want * 0.45 - m.bias) * Math.min(1, dt * 2);
+          if (clock < m.down) {
+            if (m.slide) {
+              const k = clamp((clock - m.slide.t0) / m.slide.dur, 0, 1), e = 1 - (1 - k) * (1 - k);
+              setRoot(m, s, { x: m.slide.from.x + (m.slide.to.x - m.slide.from.x) * e, z: m.slide.from.z + (m.slide.to.z - m.slide.from.z) * e });
+            }
+            m.vl = 0;
+            continue;
+          }
+          m.slide = null;
+          if (phase === 'rally' && ball && m.hit) { approach(s, m, dt); continue; }
           let ty = m.lane * 0.5 * leftSign(s), tx = clamp(1 - m.bias, 0.45, 1.3);
           if (phase === 'rally' && ball && ball.receiver === m && !ball.net && !ball.out) {
-            ty = clamp(ball.contact.y, -1.4, 1.4);
-            tx = clamp(ball.contact.x * lineN(s), 0.25, DEEPEST);
+            // to the contact point; for an overhead, where the smash's racket gets there
+            const c = ball.contact, a = c.kind === 'over' ? offW(m, s, 'swing') : null, b = a && offW(m, s, 'smash');
+            ty = clamp(c.y + (a ? (a.x - b.x) / halfW() : 0), -1.4, 1.4);
+            tx = clamp((c.x + (a ? (a.z - b.z) / C.line : 0)) * lineN(s), 0.25, DEEPEST);
           } else if (phase === 'serve' && serverInfo().m === m) { ty = m.py; tx = 1; }
           else if (phase === 'rally' && ball && ball.hitter === s && sides[s].members.length === 1) ty = ball.land.y * 0.25;
           const vy = clamp((ty - m.py) * cfg.moveRate, -vmax / halfW(), vmax / halfW());
@@ -1282,7 +1778,7 @@ function createRacketGame(hub, cfg) {
     draw(ctx, time) {
       const { W, H } = hub;
       ctx.clearRect(0, 0, W, H);
-      const dt = Math.min(0.1, (time - lastFrame) / 1000);
+      const dt = Math.min(0.1, (time - lastFrame) / 1000) * slowMo;
       lastFrame = time;
       if (!renderer) {
         ctx.fillStyle = cfg.sky;
@@ -1312,6 +1808,26 @@ function createRacketGame(hub, cfg) {
     },
 
     _fastForward: (sec) => { roomT -= sec; },
+    // Test hooks: put a player somewhere (spot: py across, px deep), and play a shot
+    // from side s's contact line ({ s, y, depth, kind: 'drive' | 'lob' | 'smash' |
+    // 'pop', power }), as if that side had struck it.
+    _place: (i, py, px) => { const m = [...sides[0].members, ...sides[1].members][i]; if (m) { m.py = py; m.px = px; m.hit = null; m.down = 0; m.slide = null; } },
+    _slow: (k) => { slowMo = k; },
+    _flight: () => ball && ball.segs.map((sg) => Object.fromEntries(Object.entries(sg).map(([k, v]) => [k, typeof v === 'number' ? +v.toFixed(3) : v]))),
+    _shot: ({ s = 1, y = 0, depth = 0.8, kind = 'drive', power = 0.6, x = 0 } = {}) => {
+      const m = sides[s].members[0];
+      if (!m || phase === 'room') return false;
+      phase = 'rally';
+      pendingServe = null;
+      const from = { x: toX(x), z: lineN(s) * C.line, h: strikeH(m) };
+      const speed = (2 * C.line) / (cfg.shotT - power * cfg.shotTP);
+      const how = kind === 'lob' ? { apex: PH.lob[1], spin: PH.topspin * 0.3, clear: 0.5 }
+        : kind === 'pop' ? { apex: PH.pop, spin: -PH.topspin * 0.3, clear: 0.3 }
+          : kind === 'smash' ? { speed: speed * PH.smash, spin: PH.topspin * 0.5, clear: 0.06 }
+            : { speed, spin: PH.topspin * (0.35 + 0.65 * power), clear: PH.clear * (1.1 - 0.6 * power) };
+      strike(s, m, from, y, depth, { ...how, kind, power });
+      return { contact: ball.contact, receiver: ball.receiver && ball.receiver.name, apex: +ball.apex.toFixed(2) };
+    },
     _forceStart: () => forceStart(),
     _toggleSeat: (i) => toggleSeat(i),
     _lineup: () => lineup().map((x) => (x ? (x.human ? x.human.name : 'AI') : 'closed')),
@@ -1320,8 +1836,10 @@ function createRacketGame(hub, cfg) {
       teams: sides.map((sd) => sd.members.map((m) => (m.cpu ? 'AI:' : '') + m.name)),
       scores: [sides[0].score, sides[1].score], games: [sides[0].games, sides[1].games], rally,
       views: renderer ? views().length : 0,
-      ball: ball && { t: ball.t, T: ball.T, u: ball.contact.t - ball.t, hitter: ball.hitter, out: ball.out, net: ball.net, kind: ball.kind, land: ball.land, contact: ball.contact, receiver: ball.receiver && ball.receiver.name },
-      players: sides.flatMap((sd) => sd.members.map((m) => ({ name: m.name, py: +m.py.toFixed(2), px: +m.px.toFixed(2) }))),
+      ball: ball && { t: ball.t, T: ball.T, u: ball.contact.t - ball.t, hitter: ball.hitter, out: ball.out, net: ball.net, kind: ball.kind, land: ball.land, contact: ball.contact, receiver: ball.receiver && ball.receiver.name, apex: ball.apex, pos: ballAt(ball.t) },
+      players: sides.flatMap((sd) => sd.members.map((m) => ({ name: m.name, py: +m.py.toFixed(2), px: +m.px.toFixed(2), stroke: m.hit ? m.hit.clip : null, down: clock < m.down }))),
+      hits: hitLog.slice(),
+      clock,
       server: phase === 'serve' ? serverInfo().m.name : null,
       call: TENNIS ? tennisCall() : null,
       looks: [...memberObjs.values()].map((o) => (o.ch ? `${o.ch.id}:${o.ch.overlay ? o.ch.overlay.name : 'moving'}` : 'chibi')),

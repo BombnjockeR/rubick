@@ -11,6 +11,10 @@
 // vocabulary (kitchens: js/games/kitchens.js, built into assets/kitchen_*.glb by
 // art/kitchens.py; station and food models: assets/kitchen.glb, art/kitchen.py).
 //
+// Flow: waiting room (join QR, practise, vote) -> once everyone is in, the three
+// kitchens float as miniature dioramas on cards, main-menu style, and the team picks
+// one (no reading: left / right and A) -> 3-2-1 -> the shift -> stars -> the room.
+//
 // Controls (phone gamepad): stick/d-pad move, A pick up / put down / use,
 // X (hold) chop, rinse or scrape a burnt pot, B dash. Laptop: WASD, Space, X, E.
 //
@@ -31,7 +35,7 @@ MabarGames.register({
     const MAP_IDS = Object.keys(K);
 
     // ---------------- rules / tuning ----------------
-    const ROOM_TIME = 30, SHIFT = 240, COUNTDOWN = 3, RESULTS = 12;
+    const ROOM_TIME = 30, PICK_TIME = 30, SHIFT = 240, COUNTDOWN = 3, RESULTS = 12;   // PICK_TIME: the highlighted kitchen is taken when it runs out
     const BOIL = 8, BOIL_GRACE = 12, FRY = 6, FRY_GRACE = 10;    // seconds to cook, then to burn
     const CHOP = 1.6, RINSE = 1.4, SCRAPE = 2.0;                 // seconds of holding X
     const POT_MAX = 3, PLATE_MAX = 4, PLATES = 5, PLATE_RETURN = 9;
@@ -429,6 +433,41 @@ MabarGames.register({
       respawnChefs();
       hub.showLobby(false, false);
     }
+    // Everyone is in: choose the kitchen together (the 3D cards, below).
+    function toPick() {
+      phase = 'pick';
+      pickT = PICK_TIME;
+      pickSel = Math.max(0, MAP_IDS.indexOf(mapId));
+      votes.clear();
+      pickNav.clear();
+      if (fx) { fx.dispose(); fx = null; }         // the cards liven the dioramas now
+      for (const id of MAP_IDS) envPromise(id);   // all three load while the cards appear
+      buildPick3D();
+      hub.showLobby(false, false);
+    }
+    function selectCard(i) {
+      const n = MAP_IDS.length;
+      const next = ((i % n) + n) % n;
+      if (phase !== 'pick' || next === pickSel) return;
+      pickSel = next;
+      for (const p of hub.players.values()) hub.rumble(p, 10);
+    }
+    // Leaves the pick with `id` as the kitchen; the main scene gets its diorama back.
+    function leavePick(id) {
+      teardownPick();
+      if (id !== mapId) switchKitchen(id);
+      else if (scene) buildMap3D();
+    }
+    function confirmPick() {
+      if (phase !== 'pick') return;
+      leavePick(MAP_IDS[pickSel]);
+      startShift();
+    }
+    function switchKitchen(id) {
+      loadKitchen(id);
+      respawnChefs();
+      loadEnv(id);
+    }
     function startShift() {
       resetKitchen();
       respawnChefs();
@@ -461,6 +500,201 @@ MabarGames.register({
     const boardObjs = new Map();  // tile -> { knife }
     const highlights = new Map();
     let sceneMap = null;          // which map the stations in the scene belong to
+    const KIND = { '#': 'k_counter', B: 'k_board', S: 'k_sink', C: 'k_cooker', F: 'k_fryer', P: 'k_plates', W: 'k_serve', X: 'k_bin' };
+    const FLOOR_GEO = new THREE.BoxGeometry(1, 0.08, 1);   // the plain floor when a diorama is missing
+    const FLOOR_MAT = { water: new THREE.MeshStandardMaterial({ color: '#4fb8ec', roughness: 0.9 }), a: new THREE.MeshStandardMaterial({ color: '#f0dcb8', roughness: 0.9 }), b: new THREE.MeshStandardMaterial({ color: '#e6cfa6', roughness: 0.9 }) };
+
+    // ---- the kitchen pick: three miniature kitchens on floating cards ----
+    // Like the main menu's platforms: the highlighted card lifts and its rim glows, the
+    // camera leans toward it. Nothing is written on the screen; the phone hint says
+    // "left / right, A". Each card carries the kitchen's real diorama (the same loaded
+    // .glb the shift uses, reparented) with its stations and crates as scenery.
+    const CARD = { w: 4.2, d: 4.2, t: 0.26, gap: 4.9, mini: 3.6 };   // metres: slab, thickness, spacing, the miniature's footprint
+    const MAP_COLOR = { paddy: '#6cc36a', beach: '#4fb8ec', city: '#ff9f43' };
+    let pickSel = 0, pickT = 0, pickScene = null, pickCam = null, pickLights = null, pickHover = -1;
+    const pickCards = [];         // { id, group, slab, sideMat, halo, mini, floor, env, fx, lift, own[] }
+    const pickNav = new Map();    // per-player stick repeat timer
+    const pickLook = new THREE.Vector3(), pickPos = new THREE.Vector3();
+
+    // Stations face the nearest walkable side (their fronts have the slats / the tap).
+    function facingOf(M, r, c) {
+      const walk = (rr, cc) => !!M[rr] && walkable(M[rr][cc] || '~');
+      return walk(r + 1, c) ? 0 : walk(r - 1, c) ? Math.PI : walk(r, c - 1) ? Math.PI / 2 : -Math.PI / 2;
+    }
+    function tintCrate(o, ing) {
+      o.traverse((m) => { if (m.isMesh && m.material.name === 'label') { m.material = m.material.clone(); m.material.color.set(ING[ing].color); } });
+    }
+    // Three loose ingredients on top of a crate.
+    function crateItems(ing, x, z) {
+      return [[-0.18, -0.14], [0.17, -0.12], [-0.02, 0.17]].map(([dx, dz]) => {
+        const it = tpl(`i_${ing}`);
+        it.position.set(x + dx, TOP + 0.2, z + dz);
+        it.scale.setScalar(0.8);
+        it.rotation.y = Math.random() * 6;
+        return it;
+      });
+    }
+    function fallbackFloor(k) {
+      const M = k.map, rows = M.length, cols = M[0].length;
+      const g = new THREE.Group();
+      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+        const ch = M[r][c];
+        const m = new THREE.Mesh(FLOOR_GEO, ch === '~' ? FLOOR_MAT.water : (c + r) % 2 ? FLOOR_MAT.a : FLOOR_MAT.b);
+        m.position.set(c - (cols - 1) / 2, ch === '~' ? -0.2 : -0.04, r - (rows - 1) / 2);
+        m.receiveShadow = true;
+        g.add(m);
+      }
+      return g;
+    }
+    // A kitchen's stations and crates as plain scenery (no game state), for a card.
+    function miniStations(root, k) {
+      const M = k.map, rows = M.length, cols = M[0].length;
+      const tx = (c) => c - (cols - 1) / 2, tz = (r) => r - (rows - 1) / 2;
+      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+        const ch = M[r][c];
+        const name = KIND[ch] || (CRATE[ch] ? 'k_crate' : null);
+        if (!name) continue;
+        const o = tpl(name);
+        o.position.set(tx(c), 0, tz(r));
+        o.rotation.y = facingOf(M, r, c);
+        root.add(o);
+        if (CRATE[ch]) { tintCrate(o, CRATE[ch]); for (const it of crateItems(CRATE[ch], tx(c), tz(r))) root.add(it); }
+        else if (ch === 'C') { const pot = tpl('k_pot'); pot.position.set(tx(c), TOP + 0.02, tz(r)); root.add(pot); }
+      }
+    }
+    function roundedRect(w, d, r) {
+      const sh = new THREE.Shape();
+      const x = -w / 2, y = -d / 2;
+      sh.moveTo(x + r, y);
+      sh.lineTo(x + w - r, y); sh.quadraticCurveTo(x + w, y, x + w, y + r);
+      sh.lineTo(x + w, y + d - r); sh.quadraticCurveTo(x + w, y + d, x + w - r, y + d);
+      sh.lineTo(x + r, y + d); sh.quadraticCurveTo(x, y + d, x, y + d - r);
+      sh.lineTo(x, y + r); sh.quadraticCurveTo(x, y, x + r, y);
+      return sh;
+    }
+    function buildPick3D() {
+      if (pickScene || !renderer) return;
+      pickScene = new THREE.Scene();
+      pickScene.background = new THREE.Color('#f8f2e9');
+      pickScene.fog = new THREE.Fog('#f8f2e9', 30, 60);
+      pickLights = Kit3D.lights(pickScene, { size: 11, target: [0, 0, 0], sun: [8, 15, 7] });
+      pickCam = new THREE.PerspectiveCamera(30, hub.W / hub.H, 0.1, 120);
+      MAP_IDS.forEach((id, i) => {
+        const k = K[id];
+        const group = new THREE.Group();
+        group.position.x = (i - (MAP_IDS.length - 1) / 2) * CARD.gap;
+        const color = new THREE.Color(MAP_COLOR[id] || '#ff4b3e');
+        // the card: a cream slab with a coloured edge (extrude groups: 0 = caps, 1 = sides)
+        const slabGeo = new THREE.ExtrudeGeometry(roundedRect(CARD.w, CARD.d, 0.5), { depth: CARD.t, bevelEnabled: true, bevelThickness: 0.03, bevelSize: 0.03, bevelSegments: 2 });
+        slabGeo.rotateX(-Math.PI / 2);                // extruded along +z: stand it up so the depth is the thickness
+        const topMat = new THREE.MeshStandardMaterial({ color: '#fdf9f2', roughness: 0.55 });
+        const sideMat = new THREE.MeshStandardMaterial({ color, roughness: 0.5, emissive: color, emissiveIntensity: 0 });
+        const slab = new THREE.Mesh(slabGeo, [topMat, sideMat]);
+        slab.castShadow = true;
+        slab.receiveShadow = true;
+        group.add(slab);
+        // a soft halo under the card in its colour (the menu's rim glow)
+        const halo = new THREE.Mesh(new THREE.RingGeometry(CARD.w * 0.56, CARD.w * 0.66, 48), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0, depthWrite: false }));
+        halo.rotation.x = -Math.PI / 2;
+        halo.position.y = -0.18;
+        group.add(halo);
+        const mini = new THREE.Group();
+        mini.scale.setScalar(CARD.mini / Math.max(k.map[0].length, k.map.length));
+        mini.position.y = CARD.t + 0.03;
+        const floor = fallbackFloor(k);               // until the diorama is in
+        mini.add(floor);
+        miniStations(mini, k);
+        group.add(mini);
+        pickScene.add(group);
+        const card = { id, group, slab, sideMat, halo, mini, floor, env: null, fx: null, lift: 0, own: [slabGeo, topMat, sideMat, halo.geometry, halo.material] };
+        pickCards.push(card);
+        envPromise(id).then((g) => {
+          if (!g || pickCards.indexOf(card) < 0) return;
+          card.env = g;
+          mini.remove(floor);
+          // The diorama is a slice of land: its terrain reaches below the floor (the sea
+          // bed, the canal) and can be wider than the tile grid, so size it to fit the
+          // card by its own bounds and stand it on the slab, cliffs and all.
+          const bb = new THREE.Box3().setFromObject(g.scene);
+          const size = bb.getSize(new THREE.Vector3());
+          const sc = CARD.mini / Math.max(size.x, size.z, 1);
+          mini.scale.setScalar(sc);
+          mini.position.set(-(bb.min.x + bb.max.x) / 2 * sc, CARD.t + 0.03 - bb.min.y * sc, -(bb.min.z + bb.max.z) / 2 * sc);
+          mini.add(g.scene);
+          card.fx = Kit3D.liven(g);
+        });
+      });
+      aimPickCam(true);
+    }
+    function teardownPick() {
+      for (const c of pickCards) {
+        if (c.fx) c.fx.dispose();
+        if (c.env) c.mini.remove(c.env.scene);      // the main scene adds it back
+        for (const o of c.own) o.dispose();
+      }
+      pickCards.length = 0;
+      if (pickLights) pickLights.key.shadow.dispose();
+      if (pickScene) pickScene.clear();
+      pickScene = null; pickCam = null; pickLights = null; pickHover = -1;
+      arena.style.cursor = '';
+    }
+    // Front and high, far enough back that every card fits whatever the screen's
+    // shape, leaning a little toward the highlighted one.
+    function aimPickCam(snap) {
+      if (!pickCam) return;
+      const sel = pickCards[pickSel];
+      const sx = sel ? sel.group.position.x : 0;
+      pickCam.aspect = hub.W / hub.H;
+      pickCam.updateProjectionMatrix();
+      const span = (MAP_IDS.length - 1) * CARD.gap + CARD.w + 2.6;
+      const half = pickCam.fov * Math.PI / 360;
+      const hfov = Math.atan(Math.tan(half) * pickCam.aspect);
+      const dist = Math.max(span / 2 / Math.tan(hfov), (CARD.d + 4.5) / 2 / Math.tan(half));
+      const look = new THREE.Vector3(sx * 0.22, 0.75, 0);
+      const pos = look.clone().addScaledVector(new THREE.Vector3(0, 0.66, 0.75).normalize(), dist);
+      if (snap) { pickLook.copy(look); pickPos.copy(pos); } else { pickLook.lerp(look, 0.08); pickPos.lerp(pos, 0.08); }
+      pickCam.position.copy(pickPos);
+      pickCam.lookAt(pickLook);
+    }
+    function animatePick(dt, t) {
+      const pulse = 0.5 + 0.5 * Math.sin(t * 2.9);
+      pickCards.forEach((c, i) => {
+        const on = i === pickSel;
+        c.lift += ((on ? 0.3 : 0) - c.lift) * Math.min(1, dt * 7);
+        c.group.position.y = c.lift + (on ? 0.04 * Math.sin(t * 2.2) : 0);
+        c.mini.rotation.y = on ? 0.08 * Math.sin(t * 0.6) : c.mini.rotation.y * Math.max(0, 1 - dt * 4);
+        c.sideMat.emissiveIntensity += ((on ? 0.35 + 0.3 * pulse : 0) - c.sideMat.emissiveIntensity) * Math.min(1, dt * 10);
+        c.halo.material.opacity += ((on ? 0.16 + 0.1 * pulse : i === pickHover ? 0.08 : 0) - c.halo.material.opacity) * Math.min(1, dt * 8);
+        if (c.fx) c.fx.update(dt, t);
+      });
+      aimPickCam(false);
+    }
+    // Where a card is on the screen (centre and half-width), for the host's mouse.
+    function pickScreenOf(i) {
+      const c = pickCards[i];
+      if (!c || !pickCam) return null;
+      const v = c.group.getWorldPosition(new THREE.Vector3()).project(pickCam);
+      const e = c.group.position.clone().add(new THREE.Vector3(CARD.w / 2, 0, 0)).project(pickCam);
+      return { x: (v.x + 1) / 2 * hub.W, y: (1 - v.y) / 2 * hub.H, r: Math.abs(e.x - v.x) / 2 * hub.W };
+    }
+    function pickHit(e) {
+      for (let i = 0; i < pickCards.length; i++) {
+        const s = pickScreenOf(i);
+        if (s && Math.hypot(e.clientX - s.x, (e.clientY - s.y) * 0.8) < s.r * 1.1) return i;
+      }
+      return -1;
+    }
+    // The only HUD on the pick: a slim clock in the highlighted kitchen's colour.
+    function drawPickBar(ctx) {
+      const { W, H } = hub;
+      const w = Math.min(320, W * 0.3), x = (W - w) / 2, y = H - 30;
+      rr(ctx, x, y, w, 6, 3);
+      ctx.fillStyle = 'rgba(40,36,30,0.18)';
+      ctx.fill();
+      rr(ctx, x, y, w * Math.max(0, Math.min(1, pickT / PICK_TIME)), 6, 3);
+      ctx.fillStyle = MAP_COLOR[MAP_IDS[pickSel]] || '#ff4b3e';
+      ctx.fill();
+    }
 
     function tpl(name) {
       const o = kitAsset && kitAsset.scene.getObjectByName(name);
@@ -480,6 +714,7 @@ MabarGames.register({
       camera = new THREE.PerspectiveCamera(36, hub.W / hub.H, 0.1, 200);
       buildMap3D();
       for (const id of chefs.keys()) buildChef3D(id);
+      if (phase === 'pick') buildPick3D();
     }
 
     // Places the environment, stations and crates of the current map.
@@ -494,7 +729,7 @@ MabarGames.register({
       itemObjs.clear();
       scene.background = new THREE.Color(kit.sky || '#cfe9ff');
       scene.fog = new THREE.Fog(kit.sky || '#cfe9ff', 28, 60);
-      for (const o of scene.children.filter((c) => c.isLight || c.name === 'lightTarget')) scene.remove(o);
+      for (const o of scene.children.filter((c) => c.isLight || c.name === 'lightTarget')) { if (o.shadow) o.shadow.dispose(); scene.remove(o); }
       const lights = Kit3D.lights(scene, { size: Math.max(COLS, ROWS) * 0.6, target: [0, 0, 0], sun: kit.sun || [6, 12, 5] });
       lights.key.target.name = 'lightTarget';
       if (env && env.scene) {
@@ -502,43 +737,23 @@ MabarGames.register({
         scene.add(envRoot);
         fx = Kit3D.liven(env);
       } else {                                             // fallback: a flat floor in the map's shape
-        const g = new THREE.Group();
-        for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-          const ch = MAP[r][c];
-          const m = new THREE.Mesh(new THREE.BoxGeometry(1, 0.08, 1),
-            new THREE.MeshStandardMaterial({ color: ch === '~' ? '#4fb8ec' : (c + r) % 2 ? '#f0dcb8' : '#e6cfa6', roughness: 0.9 }));
-          m.position.set(tileX(c), ch === '~' ? -0.2 : -0.04, tileZ(r));
-          m.receiveShadow = true;
-          g.add(m);
-        }
-        envRoot = g;
-        scene.add(g);
+        envRoot = fallbackFloor(kit);
+        scene.add(envRoot);
       }
-      const KIND = { '#': 'k_counter', B: 'k_board', S: 'k_sink', C: 'k_cooker', F: 'k_fryer', P: 'k_plates', W: 'k_serve', X: 'k_bin' };
       for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
         const ch = MAP[r][c];
         const name = KIND[ch] || (CRATE[ch] ? 'k_crate' : null);
         if (!name) continue;
         const o = tpl(name);
         o.position.set(tileX(c), 0, tileZ(r));
-        // stations face the nearest walkable side (their fronts have the slats / the tap)
-        const facing = ['.', '='].includes(MAP[r + 1] ? MAP[r + 1][c] : '~') ? 0 : ['.', '='].includes(MAP[r - 1] ? MAP[r - 1][c] : '~') ? Math.PI
-          : MAP[r][c - 1] && walkable(MAP[r][c - 1]) ? Math.PI / 2 : -Math.PI / 2;
+        const facing = facingOf(MAP, r, c);
         o.rotation.y = facing;
         scene.add(o);
         stationObjs.push(o);
         const t = tiles[r][c];
         if (CRATE[ch]) {
-          const ing = CRATE[ch];
-          o.traverse((m) => { if (m.isMesh && m.material.name === 'label') { m.material = m.material.clone(); m.material.color.set(ING[ing].color); } });
-          for (const [dx, dz] of [[-0.18, -0.14], [0.17, -0.12], [-0.02, 0.17]]) {
-            const it = tpl(`i_${ing}`);
-            it.position.set(tileX(c) + dx, TOP + 0.2, tileZ(r) + dz);
-            it.scale.setScalar(0.8);
-            it.rotation.y = Math.random() * 6;
-            scene.add(it);
-            stationObjs.push(it);
-          }
+          tintCrate(o, CRATE[ch]);
+          for (const it of crateItems(CRATE[ch], tileX(c), tileZ(r))) { scene.add(it); stationObjs.push(it); }
         } else if (ch === 'C') {
           const pot = tpl('k_pot');
           pot.position.set(tileX(c), TOP + 0.02, tileZ(r));
@@ -993,15 +1208,15 @@ MabarGames.register({
       });
     }
 
-    // The waiting room: join QR, the map carousel (host: ← → or click, phones:
-    // d-pad left/right), this map's recipes, votes.
-    let roomHits = [];
+    // The waiting room: join QR, the clock, who's in, votes. The kitchen is chosen
+    // next, together, on the 3D cards.
     function drawRoomCard(ctx) {
       const { W, H } = hub;
-      const n = Math.min(MAX_CHEFS, hub.players.size);
+      const chefsIn = [...chefs.values()].sort((a, b) => a.slot - b.slot);
+      const n = chefsIn.length;
       const need = [...hub.players.keys()].filter((id) => !votes.has(id)).length;
       const wide = W >= 820;
-      const cw = Math.min(860, W - 32), chh = wide ? 400 : 620;
+      const cw = Math.min(760, W - 32), chh = wide ? 296 : 540;
       const x0 = (W - cw) / 2, y0 = Math.max(14, (H - chh) / 2);
       ctx.save();
       ctx.shadowColor = 'rgba(0,0,0,0.25)';
@@ -1018,7 +1233,7 @@ MabarGames.register({
       hub.drawJoin(ctx, qx, qy, qs, { label: 'Scan with your phone to join' });
       const rx = wide ? qx + qs + 30 : x0 + 20, rw = wide ? cw - (rx - x0) - 26 : cw - 40;
       const cx = rx + rw / 2;
-      let y = wide ? y0 + 48 : qy + qs + 84;
+      let y = wide ? y0 + 50 : qy + qs + 86;
       const line = (t, size, weight, color, gap = 28) => {
         ctx.font = hub.font(weight, size);
         ctx.fillStyle = color;
@@ -1027,52 +1242,36 @@ MabarGames.register({
         ctx.fillText(t, cx, y);
         y += gap;
       };
-      line('COOKING', 28, 800, '#ff4b3e', 34);
+      line('COOKING', 28, 800, '#ff4b3e', 36);
       line(n ? `Kitchen opens in ${Math.ceil(roomT)}s` : 'Waiting for the first chef', 20, 800, '#1d2433', 40);
-      // map carousel
-      roomHits = [];
-      const ids = MAP_IDS;
-      const cardW = Math.min(150, (rw - 80) / ids.length - 8), cardH = 74;
-      const totalW = ids.length * (cardW + 8) - 8;
-      ids.forEach((id, i) => {
-        const k = K[id];
-        const bx = cx - totalW / 2 + i * (cardW + 8), by = y - 10;
-        const on = id === mapId;
-        rr(ctx, bx, by, cardW, cardH, 12);
-        ctx.fillStyle = on ? '#ff4b3e' : '#f3efe8';
+      // who's in: a chip per chef, in their colour
+      ctx.font = hub.font(700, 13);
+      const chips = chefsIn.map((c) => ({ c, w: Math.min(140, ctx.measureText(c.name).width) + 38 }));
+      const total = chips.reduce((a, b) => a + b.w + 8, -8);
+      let px = cx - total / 2;
+      for (const { c, w } of chips) {
+        rr(ctx, px, y - 15, w, 30, 15);
+        ctx.fillStyle = '#f3efe8';
         ctx.fill();
-        ctx.fillStyle = on ? '#ffffff' : '#1d2433';
-        ctx.font = hub.font(800, 13);
-        ctx.fillText(k.name, bx + cardW / 2, by + 20);
-        ctx.fillStyle = on ? 'rgba(255,255,255,0.85)' : '#6b665e';
-        ctx.font = hub.font(500, 10);
-        ctx.fillText(k.subtitle, bx + cardW / 2, by + 36);
-        k.recipes.forEach((rid, j) => {
-          ctx.font = hub.font(600, 9);
-          ctx.fillText(RECIPES[rid].name, bx + cardW / 2, by + 50 + j * 10);
-        });
-        roomHits.push({ x: bx, y: by, w: cardW, h: cardH, act: () => { pickMap(id); } });
-      });
-      y += cardH + 2;
-      line('◀ ▶  or click to choose the kitchen (phones: d-pad left / right)', 11, 600, '#9a9286', 24);
-      // recipe book for the chosen map
-      ctx.font = hub.font(600, 12);
-      for (const rid of kit.recipes) {
-        const R = RECIPES[rid];
-        const steps = R.parts.map((p) => { const [tp, st] = p.split(':'); return `${STATE_WORD[st] ? STATE_WORD[st] + ' ' : ''}${ING[tp].name}`; }).join(' + ');
-        line(`${R.name}: ${steps} → ${R.container}`, 12, 500, '#3a3630', 18);
+        ctx.fillStyle = c.color;
+        ctx.beginPath(); ctx.arc(px + 15, y, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#1d2433';
+        ctx.textAlign = 'left';
+        ctx.fillText(c.name, px + 27, y + 1, w - 34);
+        px += w + 8;
       }
-      y += 4;
+      y += n ? 46 : 20;
       line('Move with the stick · A grab / put / use · hold X to chop, rinse, scrape · B dash', 12, 600, '#5d584f', 22);
-      line(n ? (need ? `${need} more vote${need > 1 ? 's' : ''} to start now (tap “Vote to start”)` : 'Starting…') : 'Up to 4 chefs. Walk around and practise while you wait.', 13, 600, '#5d584f');
+      line('When everyone has voted, the team picks the kitchen together', 12, 600, '#9a9286', 24);
+      line(n ? (need ? `${need} more vote${need > 1 ? 's' : ''} to go on now (tap “Vote to start”)` : 'Here we go…') : 'Up to 4 chefs. Walk around and practise while you wait.', 13, 600, '#5d584f');
     }
-    function pickMap(id, dir = 0) {
-      if (phase !== 'room' || !K[id]) return;
-      if (dir) id = MAP_IDS[(MAP_IDS.indexOf(mapId) + dir + MAP_IDS.length) % MAP_IDS.length];
-      if (id === mapId) return;
-      loadKitchen(id);
-      respawnChefs();
-      loadEnv(id);
+    // Changes the kitchen: in the room it swaps the practice kitchen (the smoke test
+    // uses this), in the pick it moves the highlight.
+    function pickMap(id) {
+      if (!K[id]) return;
+      if (phase === 'pick') { selectCard(MAP_IDS.indexOf(id)); return; }
+      if (phase !== 'room' || id === mapId) return;
+      switchKitchen(id);
     }
 
     function drawOver(ctx) {
@@ -1089,7 +1288,8 @@ MabarGames.register({
 
     // ---------------- loading ----------------
     const envCache = new Map();
-    function loadEnv(id) {
+    // A kitchen's diorama, loaded once (null if the file can't load: a plain floor then).
+    function envPromise(id) {
       const k = K[id];
       if (!k) return Promise.resolve(null);
       if (!envCache.has(id)) {
@@ -1098,10 +1298,14 @@ MabarGames.register({
           return null;
         }));
       }
-      return envCache.get(id).then((g) => {
+      return envCache.get(id);
+    }
+    // ... and, if it is still the current kitchen when it arrives, into the scene.
+    function loadEnv(id) {
+      return envPromise(id).then((g) => {
         if (stopped || id !== mapId) return g;
         env = g;
-        if (scene) buildMap3D();
+        if (scene && phase !== 'pick') buildMap3D();
         return g;
       });
     }
@@ -1114,56 +1318,66 @@ MabarGames.register({
 
     toRoom();
 
-    // Host-screen input for the room card.
+    // Host-screen mouse on the pick: hover shows, a click highlights, a second click
+    // confirms (the keyboard goes through the keyboard player: ← → and Enter / Space).
     const arena = document.querySelector('#arena');
-    const hitAt = (e) => roomHits.find((h) => e.clientX >= h.x && e.clientX <= h.x + h.w && e.clientY >= h.y && e.clientY <= h.y + h.h) || null;
-    const onClick = (e) => { const h = phase === 'room' && hitAt(e); if (h) h.act(); };
-    const onKey = (e) => {
-      if (e.repeat || (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) || phase !== 'room') return;
-      if (e.code === 'ArrowLeft' || e.code === 'BracketLeft') pickMap(null, -1);
-      else if (e.code === 'ArrowRight' || e.code === 'BracketRight') pickMap(null, 1);
+    const onMove = (e) => {
+      pickHover = phase === 'pick' ? pickHit(e) : -1;
+      arena.style.cursor = pickHover >= 0 ? 'pointer' : '';
     };
+    const onClick = (e) => {
+      if (phase !== 'pick') return;
+      const i = pickHit(e);
+      if (i < 0) return;
+      if (i === pickSel) confirmPick(); else selectCard(i);
+    };
+    arena.addEventListener('pointermove', onMove);
     arena.addEventListener('click', onClick);
-    window.addEventListener('keydown', onKey);
 
     return {
       start() { for (const p of hub.players.values()) addChef(p); hub.showLobby(false, false); },
       stop() {
         stopped = true;
+        arena.removeEventListener('pointermove', onMove);
         arena.removeEventListener('click', onClick);
-        window.removeEventListener('keydown', onKey);
         hub.showLobby(true);
         for (const o of chefObjs.values()) if (o.ch) o.ch.dispose();
+        teardownPick();
         if (fx) fx.dispose();
         if (scene) scene.clear();
         if (renderer) renderer.dispose_();
       },
       join(p) { addChef(p); },
-      leave(p) { votes.delete(p.id); removeChef(p.id); },
+      leave(p) { votes.delete(p.id); pickNav.delete(p.id); removeChef(p.id); },
 
       press(p, bits) {
         const ch = chefs.get(p.id);
         if (!ch) return;
+        if (phase === 'pick') {                              // d-pad (the stick repeats in update)
+          if (bits & B.LEFT && Math.hypot(p.sx, p.sy) < 0.05) selectCard(pickSel - 1);
+          if (bits & B.RIGHT && Math.hypot(p.sx, p.sy) < 0.05) selectCard(pickSel + 1);
+          if (bits & B.A) confirmPick();
+          return;
+        }
         if (bits & B.A) { if (phase === 'over') return; interact(ch); }
         if (bits & B.X) work(ch, 0.2);
         if (bits & B.B && ch.dashCd <= 0 && (phase === 'play' || phase === 'room')) { ch.dash = DASH; ch.dashCd = DASH_CD; rumble(ch, 10); }
-        if (phase === 'room') {
-          if (bits & B.LEFT && Math.hypot(p.sx, p.sy) < 0.05) pickMap(null, -1);
-          if (bits & B.RIGHT && Math.hypot(p.sx, p.sy) < 0.05) pickMap(null, 1);
-        }
       },
       action(p) {
+        if (phase === 'pick') { if (chefs.has(p.id)) confirmPick(); return; }
         if (phase !== 'room') return;
         if (votes.has(p.id)) votes.delete(p.id); else votes.add(p.id);
         hub.rumble(p, 30);
       },
       actionLabel(p) {
+        if (phase === 'pick') return chefs.has(p.id) ? 'Choose this kitchen' : '';
         if (phase !== 'room') return '';
         return votes.has(p.id) ? 'Voted ✓ — tap to undo' : 'Vote to start';
       },
       hint(p) {
         const ch = chefs.get(p.id);
         if (!ch) return 'Kitchen is full — watch and join next shift';
+        if (phase === 'pick') return '← → pick the kitchen · A to confirm';
         if (phase === 'over') return 'Shift over!';
         const h = ch.hold;
         if (!h) return 'A grab · hold X chop/rinse · B dash';
@@ -1183,8 +1397,8 @@ MabarGames.register({
         if (h.state === 'cut' && d && d.fry) return `chopped ${nm}: fry it (A)`;
         return `${STATE_WORD[h.state] ? STATE_WORD[h.state] + ' ' : ''}${nm}: plate it (A)`;
       },
-      meta(p) { return chefs.has(p.id) ? (phase === 'room' ? (votes.has(p.id) ? 'voted' : 'chef') : 'chef') : 'watching'; },
-      resize() { if (renderer) { renderer.setSize(hub.W, hub.H, false); placeCamera(); } },
+      meta(p) { return chefs.has(p.id) ? (phase === 'room' ? (votes.has(p.id) ? 'voted' : 'chef') : phase === 'pick' ? 'choosing' : 'chef') : 'watching'; },
+      resize() { if (renderer) { renderer.setSize(hub.W, hub.H, false); placeCamera(); aimPickCam(true); } },
 
       update(dt) {
         for (let i = popups.length - 1; i >= 0; i--) { popups[i].t += dt; if (popups[i].t > 1.3) popups.splice(i, 1); }
@@ -1194,8 +1408,18 @@ MabarGames.register({
           if (hub.players.size) {
             roomT -= dt;
             const allVoted = [...hub.players.keys()].every((id) => votes.has(id));
-            if (allVoted || roomT <= 0) startShift();
+            if (allVoted || roomT <= 0) toPick();
           } else roomT = ROOM_TIME;
+        } else if (phase === 'pick') {
+          if (!hub.players.size) { leavePick(mapId); toRoom(); } else {
+            pickT -= dt;
+            for (const p of hub.players.values()) {                // stick left / right, with repeat
+              let t = pickNav.get(p.id) || 0;
+              if (Math.abs(p.sx) > 0.6) { if (t <= 0) { selectCard(pickSel + (p.sx > 0 ? 1 : -1)); t = 0.32; } else t -= dt; } else t = 0;
+              pickNav.set(p.id, t);
+            }
+            if (pickT <= 0) confirmPick();
+          }
         } else if (phase === 'countdown') {
           phaseT -= dt;
           if (phaseT <= 0) { phase = 'play'; shiftT = 0; addOrder(); addOrder(); nextOrderT = 12; }
@@ -1283,6 +1507,12 @@ MabarGames.register({
           ctx.fillText(loadErr || `Opening the kitchen… ${Math.round(loadP * 100)}%`, W / 2, H / 2);
           return;
         }
+        if (phase === 'pick' && pickScene) {
+          animatePick(dt, time / 1000);
+          renderer.render(pickScene, pickCam);
+          drawPickBar(ctx);
+          return;
+        }
         syncScene(dt, time);
         renderer.render(scene, camera);
         drawWorldUi(ctx, time);
@@ -1304,9 +1534,10 @@ MabarGames.register({
       },
 
       // Test hooks (tools/smoke.mjs).
-      _fastForward(sec) { if (phase === 'room') roomT -= sec; else if (phase === 'play') { shiftT += sec; for (const o of orders) o.t += sec; } else if (phase === 'countdown') phaseT -= sec; },
+      _fastForward(sec) { if (phase === 'room') roomT -= sec; else if (phase === 'pick') pickT -= sec; else if (phase === 'play') { shiftT += sec; for (const o of orders) o.t += sec; } else if (phase === 'countdown') phaseT -= sec; },
       _debug: () => ({
         phase, map: mapId, sceneMap, score, served, failed, combo, orders: orders.map((o) => o.id + (o.variant ? ':' + o.variant : '')),
+        pick: phase === 'pick' ? { sel: MAP_IDS[pickSel], cards: pickCards.length, loaded: pickCards.filter((c) => c.env).length, t: Math.round(pickT) } : null,
         chefs: [...chefs.values()].map((c) => ({ name: c.name, x: +c.x.toFixed(2), z: +c.z.toFixed(2), hold: c.hold && itemKey(c.hold), target: (targetOf(c) || {}).ch, animal: (chefObjs.get(c.id) || {}).ch ? chefObjs.get(c.id).ch.id : 'chibi' })),
         pots: tiles.flat().filter((t) => t.pot).map((t) => ({ items: t.pot.items.length, state: t.pot.state })),
         fryers: tiles.flat().filter((t) => t.fryer).map((t) => ({ item: t.fryer.item && itemKey(t.fryer.item), state: t.fryer.state })),
