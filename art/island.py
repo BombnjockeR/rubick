@@ -11,13 +11,16 @@ single triangles, a palm canopy floats without a trunk. What this build does:
   removed   the old court, its net and surround ground, the three stand boxes
             with their benches, spectators and umbrellas, every stretched sheet
             (the tarp, the streamers, a torn pennant line), the rails and the
-            plank deck that stood in front of them
-  kept      the island, its rock skirt, the islets, trees, piers, banners,
-            crates, lamps, fences and the boat
-  added     a regulation court on a terracotta plinth, four grandstands hugging
-            it (three tiers on the long sides with umbrellas, two behind each
-            baseline), a crowd of toy animals, pennant strings along the rails,
-            a trunk for the floating canopy, seagulls, clouds and a sea
+            plank deck that stood in front of them, every tree (muddy, faceted
+            canopies with baked-in shading) and the ball crates
+  kept      the island, its rock skirt, the islets, piers, banners, lamps,
+            fences and the boat; its texture is colour-graded (more saturation,
+            lifted midtones) to the reference's bright palette
+  added     a regulation court on a coral plinth, four grandstands hugging it
+            (three tiers on the long sides with umbrellas, two behind each
+            baseline), a crowd of toy animals of six species, pennant strings
+            along the rails, stylised palms and bushes where the trees stood,
+            flowers, ball baskets, seagulls, clouds and a turquoise sea
   animated  a 20 s baked loop: the boat rocks at its mooring, the gulls circle
             and flap. js/kit3d.js (Kit3D.liven) moves the rest by node name:
             tree_* sway, flag_* and bunt_* flutter through their "wave" morph
@@ -26,7 +29,7 @@ single triangles, a palm canopy floats without a trunk. What this build does:
 Output (Blender Z-up -> glTF Y-up), meters: court centred on the origin, long
 axis along Blender Y, net at y = 0, playing surface at z = 0, side 0's baseline
 toward Blender +Y (glTF -Z). Nodes: island, island_court, sea, stand_*, tree_*,
-flag_*, bunt_*, crowd_*, umbrella_*, cloud_*, boat, bird_* (> wing_l, wing_r).
+flag_*, bunt_*, crowd_*, umbrella_*, cloud_*, basket_*, boat, bird_* (> wing_l, wing_r).
 """
 import math
 import os
@@ -124,6 +127,20 @@ def sheet(p):
     return p['n'] <= 12 and s[2] > 0.03 and p['col'].mean() > 0.45 and (min(s[0], s[1]) < 0.015 or (p['n'] <= 10 and s[2] > 0.08))
 
 
+def banner(p):
+    """A hanging banner: a sheet taller than wide in whitish cloth (the draped sails
+    the model strung between its poles are saturated blue, and go)."""
+    c = p['col']
+    return sheet(p) and p['s'][2] >= max(p['s'][0], p['s'][1]) and (c.max() - c.min()) < 0.3
+
+
+def in_band(p, dx=13.6, dy=20.6):
+    """Inside the court, the surround and the new stands: nothing of the model's
+    loose props belongs there any more."""
+    w = W(p['c'])
+    return abs(w.x) < dx and abs(w.y) < dy
+
+
 # Source -> court frame (meters; the z drop onto the new court comes later).
 M = (Matrix.Rotation(math.radians(-COURT_ANGLE + SPIN), 4, 'Z') @ Matrix.Scale(S, 4)
      @ Matrix.Translation(Vector((-COURT_CENTRE[0], -COURT_CENTRE[1], 0))))
@@ -151,8 +168,12 @@ for p in others:
     s = p['s']
     if max(s[0], s[1]) > 0.15 and min(s[0], s[1]) > 0.08 and s[2] < 0.06:
         remove(p, 'stand')                       # the three stretched stand boxes (and the old court sheet)
-    elif sheet(p) and s[2] < max(s[0], s[1]):
+    elif sheet(p) and not banner(p):
         remove(p, 'bunting sheet')               # pennant lines drawn as draped cloths between the banner poles
+    elif p['fill'] < 0.15 and 0.02 < s[2] < 0.09 and max(s[0], s[1]) > 0.05 and p['n'] <= 12 and not green(p):
+        remove(p, 'draped sheet')                # the same cloths hung diagonally (thick bounding box, almost no area)
+    elif in_band(p) and s.max() < 0.15 and not banner(p):
+        remove(p, 'in the way')                  # lamp posts, fence posts, crates where the stands now are
     elif p['n'] <= 40 and s.max() > 0.09 and p['fill'] < 0.1:
         remove(p, 'sheet')                       # the tarp, the streamer, the old net's band
     elif cyan(p) and p['fill'] < 0.12:
@@ -181,6 +202,8 @@ for p in others:
     elif (s[2] < 0.015 and 0.05 < max(s[0], s[1]) < 0.1 and p['fill'] < 0.35 and p['n'] <= 16 and ground[p['id']] == MAIN
           and c[0] > c[2] * 1.5 and abs(W(p['c']).y) > 19):
         remove(p, 'deck')                        # the plank deck where the near stand goes
+    elif c[0] > 0.45 and c[1] > 0.38 and c[2] < 0.28 and s.max() < 0.05 and p['n'] <= 30 and p['fill'] > 0.35:
+        remove(p, 'crate')                       # yellow-green boxes of balls and small clutter (baskets replace them)
 poles = {q['id']: q for q in others if max(q['s'][0], q['s'][1]) < 0.012 and q['s'][2] > 0.05}
 for p in [q for q in others if why.get(q['id']) == 'umbrella']:
     for q in poles.values():                     # the umbrellas' poles
@@ -211,7 +234,9 @@ def split(name, idset):
 
 
 taken = set(kill)
-trees = []                                       # (object, canopy piece, base point in source units, has_trunk)
+# The model's trees go (faceted canopies with the shading baked into the texture);
+# stylised palms and bushes are built later where they stood.
+tree_spots = []                                  # (base point in source units, canopy size)
 for p in sorted(others, key=lambda q: -q['n']):
     s = p['s']
     if (p['id'] in taken or not green(p) or not 10 <= p['n'] <= 90 or not 0.025 <= s.max() <= 0.1 or s.min() < 0.008
@@ -234,12 +259,16 @@ for p in sorted(others, key=lambda q: -q['n']):
             group.add(q['id'])
     for i in group:
         pieces[i]['tree'] = True
+        kill.add(i)
+        why[i] = 'tree'
     taken |= group
-    has_trunk = len(group) > 1 or ground[p['id']] is not None
-    trees.append((split(f'tree_{len(trees)}', group), p, (p['c'][0], p['c'][1], base), has_trunk))
+    tree_spots.append(((p['c'][0], p['c'][1], base if ground[p['id']] is not None else None), float(s.max())))
+for p in others:                                 # small green scraps left on the ground (fronds, grass tufts)
+    if p['id'] not in taken and green(p) and p['n'] < 40 and p['s'].max() < 0.03:
+        kill.add(p['id']); why[p['id']] = 'scrap'; taken.add(p['id'])
 flags = []
 for p in others:
-    if p['id'] not in taken and sheet(p):     # the hanging banners (taller than wide; the wide ones went above)
+    if p['id'] not in taken and banner(p):    # the hanging banners (the wide and the blue sheets went above)
         taken.add(p['id'])
         flags.append((split(f'flag_{len(flags)}', {p['id']}), p))
 hull = [p for p in others if p['id'] not in taken and ground[p['id']] is None and p['lo'][2] < 0.02
@@ -251,9 +280,16 @@ if hull:
             and np.all(q['c'][:2] < h['hi'][:2] + 0.01) and q['c'][2] < 0.16}
     taken |= crew
     boat = (split('boat', crew), h)
-print(f'split off {len(trees)} trees, {len(flags)} banners, the boat ({len(crew) if hull else 0} pieces)')
+bm = bmesh.new()                                 # the trees and scraps marked after the first pass
+bm.from_mesh(me)
+pids_now = vert_pids()
+bmesh.ops.delete(bm, geom=[f for f in bm.faces if pids_now[f.verts[0].index] in kill], context='FACES')
+bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context='VERTS')
+bm.to_mesh(me)
+bm.free()
+print(f'{len(tree_spots)} trees replaced; split off {len(flags)} banners, the boat ({len(crew) if hull else 0} pieces)')
 
-moving = [island] + [t for t, *_ in trees] + [f for f, _ in flags] + ([boat[0]] if boat else [])
+moving = [island] + [f for f, _ in flags] + ([boat[0]] if boat else [])
 for o in moving:
     o.data.transform(M)
 
@@ -287,8 +323,6 @@ def set_origin(o, base):
     o.location = base
 
 
-for o, p, base, _ in trees:
-    set_origin(o, WD_(base))
 for o, p in flags:
     set_origin(o, WD_((p['c'][0], p['c'][1], p['hi'][2])))
 if boat:
@@ -324,26 +358,66 @@ bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context='VE
 bm.to_mesh(me)
 bm.free()
 print(f'island: removed {len(net)} faces of the old net, {len(old)} of the old court; flattened {flat} ground faces')
+
+
+def grade_texture(o, sat=1.32, gamma=0.86, warm=(1.03, 1.0, 0.97)):
+    """The AI texture is muddy (shading baked in, low chroma): push it toward the
+    reference's bright palette. Saturation about the luminance, a gamma that lifts
+    the midtones, a touch of warmth."""
+    img = next(n.image for n in o.material_slots[0].material.node_tree.nodes if n.type == 'TEX_IMAGE')
+    px = np.empty(len(img.pixels), dtype=np.float32)
+    img.pixels.foreach_get(px)
+    px = px.reshape(-1, 4)
+    rgb = px[:, :3]
+    lum = rgb @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
+    rgb = lum[:, None] + (rgb - lum[:, None]) * sat
+    rgb = np.clip(rgb, 0, 1) ** gamma * np.array(warm, dtype=np.float32)
+    px[:, :3] = np.clip(rgb, 0, 1)
+    img.pixels.foreach_set(px.ravel())
+    img.update()
+
+
+grade_texture(island)
 rig.downsize_texture(island, 2048, os.path.join(os.path.dirname(os.path.abspath(OUT)), '_tex'), quality=85)
 
 # ====================================================================== materials
-SURF = mat('#c0533f', rough=0.8)          # terracotta surround, sampled from the island texture
-COURT = mat('#2a7a55', rough=0.75)        # court green, sampled likewise
+SURF = mat('#d8705a', rough=0.8)          # coral surround, as in the reference
+COURT = mat('#3f8f5e', rough=0.75)        # court green
 LINE = mat('#ffffff', rough=0.5)
-WOOD = mat('#a86f3e', rough=0.85)
-WOOD_D = mat('#7d4f2a', rough=0.9)
-PLANK = mat('#c98b52', rough=0.85)
+WOOD = mat('#c88d55', rough=0.85)         # light tropical wood
+WOOD_D = mat('#9a6435', rough=0.9)
+PLANK = mat('#dba772', rough=0.85)
 NETM = mat('#1f3b33', rough=0.95)
 DARK = mat('#3a3330', rough=0.7)
 WHITE = mat('#f7f7f4', rough=0.9)
 CLOUD = mat('#ffffff', rough=1.0)
 GREY = mat('#d9d9d6', rough=0.9)
-TRUNK = mat('#8a5a35', rough=0.9)
-LEAF = mat('#5fae45', rough=0.95)
-FUR = [mat(c, rough=0.8) for c in ('#f6e7c9', '#d9a066', '#f4f4f4', '#c9c9d4', '#f5b5a0', '#e8c48a', '#9c6b43', '#fbd27a')]
+TRUNK_A = mat('#a87448', rough=0.9)
+TRUNK_B = mat('#8c5c36', rough=0.9)
+LEAF_A = mat('#4fb848', rough=0.75)
+LEAF_B = mat('#7fd65e', rough=0.75)
+LEAF_C = mat('#3d9e3c', rough=0.8)
+COCO = mat('#7a4b2a', rough=0.8)
+FLOWERS = [mat(c, rough=0.6) for c in ('#ff6fa8', '#ffd54a', '#ffffff', '#ff8a5c', '#c58bff')]
+BALL = mat('#d7f53b', rough=0.7)
 PALETTE = [mat(c, rough=0.75) for c in ('#ff5a4e', '#ffcf3d', '#3b8cf0', '#ffffff', '#5fd36a', '#ff8fb0')]
 UMB = [(mat('#e8463a', rough=0.7), mat('#fff7ee', rough=0.7)), (mat('#3b7fe0', rough=0.7), mat('#fff7ee', rough=0.7)),
        (mat('#f2b705', rough=0.7), mat('#fff7ee', rough=0.7))]
+# Spectators: six species, each with its fur, belly and ear style; shirts from the palette.
+SPECIES = {
+    'bunny': dict(fur=('#f6f1e4', '#d9c9ad', '#e8d5e5'), belly='#fff8f0', ears='tall'),
+    'bear': dict(fur=('#b97a4b', '#8d5a33', '#d9a066'), belly='#e8c89a', ears='round'),
+    'cat': dict(fur=('#f2a35a', '#c9c9d4', '#f4f4f4'), belly='#fff3e0', ears='point'),
+    'pig': dict(fur=('#f5b5c0', '#f7c6cc'), belly='#fbd7dc', ears='flop'),
+    'panda': dict(fur=('#f6f6f6',), belly='#ffffff', ears='panda'),
+    'fox': dict(fur=('#ea8a3c', '#f29b55'), belly='#fff1dc', ears='point'),
+}
+SHIRTS = [mat(c, rough=0.7) for c in ('#3b8cf0', '#ff5a4e', '#ffcf3d', '#5fd36a', '#ff8fb0', '#8e6bff', '#2bb3c0', '#ffffff')]
+EYE_W = mat('#ffffff', rough=0.3)
+EYE_D = mat('#2a2222', rough=0.3)
+BLUSH = mat('#ff9aa8', rough=0.7)
+PINK = mat('#ffb3c0', rough=0.7)
+BLACK = mat('#2a2a2e', rough=0.8)
 
 
 def bar(g, a, b, r, m, seg=8):
@@ -385,26 +459,56 @@ bunting_pts = []     # front-rail post tops per stand: pennant strings run betwe
 
 
 def spectator(name, loc, yaw):
-    """A toy animal sitting on a bench: body, head, ears in one of three styles."""
+    """A toy animal sitting on a bench, facing -Y: one of six species, a bright
+    shirt, big eyes with highlights, blush, paws in the lap, now and then a cap."""
     g = Geo()
-    fur = rng.choice(FUR)
-    g.sphere(0.34, (0, 0, 0.3), fur, scale=(1, 0.85, 0.95), seg=10)
-    g.sphere(0.3, (0, 0.03, 0.82), fur, seg=10)
-    style = rng.random()
-    if style < 0.4:                                            # bunny: tall ears
-        for sx in (-1, 1):
-            g.sphere(0.08, (sx * 0.12, 0.05, 1.22), fur, scale=(1, 0.7, 2.6), seg=8, rot=(0, sx * 0.18, 0))
-    elif style < 0.7:                                          # round ears
-        for sx in (-1, 1):
-            g.sphere(0.11, (sx * 0.24, 0.05, 1.02), fur, seg=8)
-    else:                                                      # cat: pointed ears
-        for sx in (-1, 1):
-            g.cone(0.1, 0.22, (sx * 0.18, 0.05, 1.1), fur, seg=6)
+    kind = rng.choice(list(SPECIES))
+    sp = SPECIES[kind]
+    fur = mat(rng.choice(sp['fur']), rough=0.8)
+    belly = mat(sp['belly'], rough=0.8)
+    shirt = rng.choice(SHIRTS)
+    g.sphere(0.34, (0, 0, 0.3), shirt, scale=(1, 0.85, 0.95), seg=10)                  # body in a shirt
+    g.sphere(0.2, (0, -0.2, 0.34), belly if rng.random() < 0.5 else shirt, scale=(1, 0.45, 0.9), seg=8)
+    g.sphere(0.31, (0, 0.02, 0.84), fur, seg=12)                                        # head
+    g.sphere(0.16, (0, -0.22, 0.76), belly, scale=(1.25, 0.6, 0.8), seg=8)              # muzzle
     for sx in (-1, 1):
-        g.sphere(0.035, (sx * 0.1, -0.27, 0.86), DARK, seg=6)  # eyes toward -Y (the court)
-        g.sphere(0.1, (sx * 0.38, -0.1, 0.42), fur, seg=7)     # paws in the lap
-    g.sphere(0.05, (0, -0.3, 0.74), mat('#e98f7c', rough=0.7), scale=(1.4, 0.6, 0.7), seg=6)
-    return g.build(name, loc=loc, rot=(0, 0, yaw))
+        if kind == 'panda':
+            g.sphere(0.1, (sx * 0.12, -0.23, 0.9), BLACK, scale=(1, 0.5, 1.25), seg=8)   # eye patches
+        g.sphere(0.065, (sx * 0.12, -0.27, 0.9), EYE_W, scale=(1, 0.6, 1), seg=8)
+        g.sphere(0.04, (sx * 0.12, -0.31, 0.9), EYE_D, seg=6)
+        g.sphere(0.014, (sx * 0.14, -0.345, 0.925), EYE_W, seg=5)                       # highlight
+        g.sphere(0.045, (sx * 0.21, -0.25, 0.79), BLUSH, scale=(1, 0.4, 0.7), seg=6)
+        g.sphere(0.1, (sx * 0.36, -0.12, 0.42), fur, seg=7)                             # paws in the lap
+    if kind == 'pig':
+        g.cyl(0.07, 0.04, (0, -0.36, 0.78), PINK, seg=8, rot=(math.pi / 2, 0, 0))        # snout
+    else:
+        g.sphere(0.035, (0, -0.36, 0.79), EYE_D if kind != 'bunny' else PINK, scale=(1.3, 0.6, 0.8), seg=6)
+    ears = sp['ears']
+    for sx in (-1, 1):
+        if ears == 'tall':
+            g.sphere(0.085, (sx * 0.13, 0.04, 1.3), fur, scale=(1, 0.65, 2.6), seg=8, rot=(0, sx * 0.2, 0))
+            g.sphere(0.045, (sx * 0.13, -0.01, 1.3), PINK, scale=(1, 0.5, 2.0), seg=6, rot=(0, sx * 0.2, 0))
+        elif ears == 'round':
+            g.sphere(0.11, (sx * 0.25, 0.04, 1.05), fur, seg=8)
+            g.sphere(0.06, (sx * 0.25, -0.02, 1.05), belly, scale=(1, 0.5, 1), seg=6)
+        elif ears == 'panda':
+            g.sphere(0.11, (sx * 0.25, 0.04, 1.06), BLACK, seg=8)
+        elif ears == 'flop':
+            g.cone(0.09, 0.22, (sx * 0.26, 0.02, 1.0), fur, seg=6, rot=(0, sx * 1.2, 0))
+        else:
+            g.cone(0.1, 0.26, (sx * 0.2, 0.04, 1.12), fur, seg=6, rot=(0, sx * 0.15, 0))
+            g.cone(0.05, 0.16, (sx * 0.2, 0.0, 1.11), belly if kind == 'fox' else PINK, seg=5, rot=(0, sx * 0.15, 0))
+    if rng.random() < 0.3:                                                              # a cap in a team colour
+        cap = rng.choice(SHIRTS)
+        g.sphere(0.31, (0, 0.03, 0.9), cap, scale=(1.02, 1.0, 0.75), seg=12)
+        g.box((0.3, 0.26, 0.04), (0, -0.3, 0.98), cap, bevel=0.01)
+    elif rng.random() < 0.3:                                                            # a little flag
+        bar(g, (0.42, -0.1, 0.5), (0.5, -0.1, 1.25), 0.02, WOOD_D, seg=5)
+        g.poly(((0.5, -0.1, 1.25), (0.5, -0.1, 1.0), (0.86, -0.1, 1.12)), rng.choice(PALETTE))
+    scale = rng.uniform(0.9, 1.08)
+    o = g.build(name, loc=loc, rot=(0, 0, yaw))
+    o.scale = (scale, scale, scale)
+    return o
 
 
 def umbrella(name, loc):
@@ -550,19 +654,90 @@ for o, p in flags:
         sk.data[i].co = Vector((v + d).tolist())
     sk.value = 0.0
 
-# A trunk for any canopy the model left floating.
+# ====================================================================== palms, bushes, flowers
+def palm(name, loc, h, yaw, lean):
+    """A stylised coconut palm: a ringed trunk curving `lean` outward, 8-10 fronds that
+    rise and droop, coconuts under the crown. Origin at the base (Kit3D.liven sways it)."""
+    g = Geo()
+
+    def p(t):
+        return Vector((lean * t * t * h * 0.45 * math.cos(yaw), lean * t * t * h * 0.45 * math.sin(yaw), t * h))
+    n = 7
+    for i in range(n):
+        a, b = p(i / n), p((i + 1) / n)
+        r = 0.27 * (1 - 0.45 * i / n)
+        bar(g, a, b, r, TRUNK_A if i % 2 else TRUNK_B, seg=7)
+        g.sphere(r * 1.12, b, TRUNK_B if i % 2 else TRUNK_A, scale=(1, 1, 0.45), seg=7)   # growth rings
+    top = p(1)
+    g.sphere(0.36, top, LEAF_C, seg=8)
+    nf = 8 + rng.randint(0, 2)
+    for k in range(nf):
+        a = k * TAU / nf + rng.uniform(-0.15, 0.15)
+        d = Vector((math.cos(a), math.sin(a), 0))
+        side = Vector((-d.y, d.x, 0))
+        length = h * rng.uniform(0.4, 0.52)
+        lift = rng.uniform(0.35, 0.6)
+        m = LEAF_A if k % 2 else LEAF_B
+        pts = []
+        for j in range(6):
+            t = j / 5
+            c = top + d * (length * t * 0.95) + Vector((0, 0, length * (lift * t - (lift + 0.5) * t * t)))
+            w = 0.085 * h * math.sin(math.pi * min(1.0, t + 0.08)) + 0.03
+            pts.append((c, w))
+        for j in range(5):
+            (c0, w0), (c1, w1) = pts[j], pts[j + 1]
+            g.poly((c0 - side * w0, c0 + side * w0, c1 + side * w1, c1 - side * w1), m)
+            g.poly((c0 + side * w0, c0 - side * w0, c1 - side * w1, c1 + side * w1), m)   # the underside too
+    for i in range(3):
+        a = i * TAU / 3 + 0.5
+        g.sphere(0.2, top + Vector((0.3 * math.cos(a), 0.3 * math.sin(a), -0.28)), COCO, seg=7)
+    return g.build(name, loc=loc)
+
+
+def bush(name, loc, s):
+    g = Geo()
+    for i in range(5):
+        a = i * TAU / 5 + rng.random()
+        r = s * rng.uniform(0.55, 0.8)
+        g.sphere(r, (0.45 * s * math.cos(a), 0.45 * s * math.sin(a), r * 0.75), LEAF_A if i % 2 else LEAF_B, seg=8)
+    g.sphere(s * 0.8, (0, 0, s * 0.7), LEAF_B, seg=8)
+    for i in range(4):                                       # flowers
+        a = rng.random() * TAU
+        g.sphere(0.09, (0.7 * s * math.cos(a), 0.7 * s * math.sin(a), s * 0.95), rng.choice(FLOWERS), seg=6)
+    return g.build(name, loc=loc)
+
+
 dg = bpy.context.evaluated_depsgraph_get()
-for o, p, base, has_trunk in trees:
-    if has_trunk:
-        continue
-    hit, loc, *_ = sc.ray_cast(dg, Vector((o.location.x, o.location.y, o.location.z - 0.3)), Vector((0, 0, -1)))
+trees = []
+for i, ((x, y, base_z), size) in enumerate(tree_spots):
+    w = W((x, y, 0))
+    hit, loc, *_ = sc.ray_cast(dg, Vector((w.x, w.y, 60)), Vector((0, 0, -1)))
     if not hit:
         continue
+    base = Vector((w.x, w.y, loc.z - 0.05))
+    yaw = math.atan2(w.y, w.x) + rng.uniform(-0.6, 0.6)   # leaning out toward the sea
+    if size < 0.045:
+        trees.append(bush(f'tree_{len(trees)}', base, rng.uniform(0.7, 1.1)))
+    else:
+        trees.append(palm(f'tree_{len(trees)}', base, min(9.5, max(4.5, size * S * 1.1)) * rng.uniform(0.85, 1.1), yaw, rng.uniform(0.15, 0.45)))
+for o in stands:                                             # bushes with flowers at the stands' ends
+    for sx in (-1, 1):
+        length = (2 * L - 2) if 'left' in o.name or 'right' in o.name else (2 * WD + 4)
+        rot = Matrix.Rotation(o.rotation_euler.z, 4, 'Z')
+        pos = Vector(o.location) + rot @ Vector((sx * (length / 2 + 1.1), 1.2, 0))
+        trees.append(bush(f'tree_{len(trees)}', pos, rng.uniform(0.6, 0.9)))
+print(f'{len(trees)} palms and bushes')
+
+# Ball baskets by the net posts (the model's yellow crates were removed).
+for sx in (-1, 1):
     g = Geo()
-    h = o.location.z - loc.z + 0.6
-    g.cyl(0.22, h, (0, 0, -h / 2 + 0.6), TRUNK, seg=8, r2=0.16)
-    g.build(o.name + '_trunk', parent=o)
-    print(f'  trunk added under {o.name} ({h:.1f} m)')
+    g.cyl(0.42, 0.5, (0, 0, 0.25), WOOD_D, seg=12, r2=0.5, bevel=0.02)
+    g.cyl(0.52, 0.06, (0, 0, 0.53), WOOD, seg=12, bevel=0.02)
+    for i in range(7):
+        a = i * TAU / 7
+        g.sphere(0.11, (0.26 * math.cos(a), 0.26 * math.sin(a), 0.56), BALL, seg=8)
+    g.sphere(0.11, (0, 0, 0.64), BALL, seg=8)
+    g.build(f'basket_{0 if sx < 0 else 1}', loc=(sx * (WD + 2.4), 0, 0))
 
 # ====================================================================== sea
 Pw = np.empty(len(me.vertices) * 3)
@@ -570,8 +745,8 @@ me.vertices.foreach_get('co', Pw)
 bottom = float(Pw.reshape(-1, 3)[:, 2].min())
 sea_z = bottom + 1.2
 g = Geo()
-g.cyl(420, 0.2, (0, 0, sea_z - 0.1), mat('#2fa9dc', rough=0.25, name='sea'), seg=64)
-g.cyl(75, 0.2, (0, 0, sea_z - 0.02), mat('#5fd0ec', rough=0.3, name='shallows'), seg=64)   # shallows around the island
+g.cyl(420, 0.2, (0, 0, sea_z - 0.1), mat('#1fa9d4', rough=0.2, name='sea'), seg=64)
+g.cyl(80, 0.2, (0, 0, sea_z - 0.02), mat('#5fdcec', rough=0.25, name='shallows'), seg=64)   # turquoise shallows around the island
 sea = g.build('sea')
 # Planar UVs (one tile per 24 m) so Kit3D.liven can scroll a ripple texture over it.
 uvl = sea.data.uv_layers.new(name='uv')
@@ -603,15 +778,20 @@ def cloud(name, loc, s):
     for i in range(rng.randint(3, 6)):
         r = s * rng.uniform(0.5, 1.0)
         g.sphere(r, (rng.uniform(-1.3, 1.3) * s, rng.uniform(-0.7, 0.7) * s, rng.uniform(-0.1, 0.4) * s),
-                 CLOUD, scale=(1, 1, 0.6), seg=8)
+                 CLOUD, scale=(1, 1, 0.65), seg=10)
+    g.box((s * 2.6, s * 1.6, s * 0.25), (0, 0, -s * 0.25), CLOUD, bevel=s * 0.1)   # a flat base, like a cartoon cloud
     return g.build(name, loc=loc)
 
 
 clouds = []
-for i in range(7):
-    a = TAU * i / 7 + rng.uniform(-0.3, 0.3)
-    r = rng.uniform(80, 125)
-    clouds.append(cloud(f'cloud_{i}', (r * math.cos(a), r * math.sin(a), rng.uniform(22, 38)), rng.uniform(4, 7)))
+for i in range(10):                                       # a ring of big clouds around the horizon
+    a = TAU * i / 10 + rng.uniform(-0.25, 0.25)
+    r = rng.uniform(70, 120)
+    clouds.append(cloud(f'cloud_{len(clouds)}', (r * math.cos(a), r * math.sin(a), rng.uniform(16, 30)), rng.uniform(5, 9)))
+for i in range(4):                                        # smaller ones nearer and lower, for parallax
+    a = TAU * i / 4 + rng.uniform(-0.5, 0.5)
+    r = rng.uniform(42, 60)
+    clouds.append(cloud(f'cloud_{len(clouds)}', (r * math.cos(a), r * math.sin(a), rng.uniform(12, 18)), rng.uniform(2.5, 4)))
 
 
 # ====================================================================== animation

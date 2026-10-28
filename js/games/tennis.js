@@ -34,6 +34,11 @@ MabarRacket.define({
   deepest: 1.18, bounceSpeed: 0.7,
   cam: { back: 8.5, height: 6.3, rise: 0.5, push: 1.0, lookY: 0.2, ahead: -0.12, track: 0.4, follow: 0.4, fov: 50 },
   orbit: [27, 17, 0],
-  sky: '#8fd3ff', fog: [70, 150], shadowSize: 30, sun: [14, 24, 9],
+  // Daylight on the island: a gradient sky dome, a strong warm sun with a cooler
+  // sky and sea-bounce hemisphere, fog that only takes the far horizon.
+  sky: '#cdeeff', fog: [120, 300], shadowSize: 30, sun: [16, 26, 10],
+  skyDome: { zenith: '#2f7fe0', horizon: '#cdeeff' },
+  light: { hemi: '#dff1ff', ground: '#6fbdd2', hemiIntensity: 1.2, keyIntensity: 3.3, keyColor: '#fff0d2' },
+  exposure: 1.12,
   tagSize: 0.55, blobGrow: 0.4, blobFade: 0.08,
 });

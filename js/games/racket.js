@@ -482,12 +482,14 @@ function createRacketGame(hub, cfg) {
 
   function setup(env, chars) {
     renderer = Kit3D.renderer(hub);
+    if (cfg.exposure) renderer.toneMappingExposure = cfg.exposure;
     scene = new THREE.Scene();
     scene.background = new THREE.Color(cfg.sky);
     scene.fog = new THREE.Fog(cfg.sky, cfg.fog[0], cfg.fog[1]);
+    if (cfg.skyDome) scene.add(Kit3D.skyDome(cfg.skyDome));   // gradient sky behind the venue
     scene.add(env.scene);
     fx = Kit3D.liven(env);
-    Kit3D.lights(scene, { size: cfg.shadowSize, target: [0, 0, 0], sun: cfg.sun });
+    Kit3D.lights(scene, { size: cfg.shadowSize, target: [0, 0, 0], sun: cfg.sun, ...(cfg.light || {}) });
     template = chars.scene.getObjectByName(cfg.character);
 
     ballMesh = new THREE.Mesh(new THREE.SphereGeometry(cfg.ballR, 20, 14),

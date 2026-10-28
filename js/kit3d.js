@@ -155,11 +155,34 @@
       };
     },
 
-    // Bright, warm "toy diorama" lighting.
-    lights(scene, { size = 12, target = [0, 0, 0], sun = [8, 14, 7] } = {}) {
-      const hemi = new THREE.HemisphereLight('#fff8ee', '#d9c9ad', 1.75);
-      scene.add(hemi);
-      const key = new THREE.DirectionalLight('#fff2dc', 2.9);
+    // A sky dome: a big inside-out sphere with a vertex-colour gradient from the
+    // horizon up to the zenith (fog-free, drawn first). Scenes with a flat
+    // background colour look like a studio; this one looks like a day outside.
+    skyDome({ zenith = '#2f7fe0', horizon = '#cfeeff', radius = 370, blend = 0.55 } = {}) {
+      const geo = new THREE.SphereGeometry(radius, 32, 16);
+      const z = new THREE.Color(zenith), h = new THREE.Color(horizon), c = new THREE.Color();
+      const pos = geo.attributes.position, col = new Float32Array(pos.count * 3);
+      for (let i = 0; i < pos.count; i++) {
+        const t = Math.max(0, pos.getY(i) / radius) / blend;
+        const k = t >= 1 ? 1 : t * t * (3 - 2 * t);
+        c.copy(h).lerp(z, k);
+        col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+      }
+      geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false, toneMapped: false }));
+      mesh.name = 'sky';
+      mesh.renderOrder = -1;
+      mesh.frustumCulled = false;
+      return mesh;
+    },
+
+    // Bright, warm "toy diorama" lighting. `hemi` / `ground` tint the sky and
+    // bounce light, `hemiIntensity` / `keyIntensity` set the balance (a lower
+    // hemisphere and a stronger sun give more shape to an outdoor scene).
+    lights(scene, { size = 12, target = [0, 0, 0], sun = [8, 14, 7], hemi = '#fff8ee', ground = '#d9c9ad', hemiIntensity = 1.75, keyIntensity = 2.9, keyColor = '#fff2dc' } = {}) {
+      const hemi_ = new THREE.HemisphereLight(hemi, ground, hemiIntensity);
+      scene.add(hemi_);
+      const key = new THREE.DirectionalLight(keyColor, keyIntensity);
       key.position.set(target[0] + sun[0], target[1] + sun[1], target[2] + sun[2]);
       key.target.position.set(...target);
       key.castShadow = true;
@@ -172,7 +195,7 @@
       const rim = new THREE.DirectionalLight('#d8e8ff', 0.6);
       rim.position.set(target[0] - 8, target[1] + 6, target[2] - 6);
       scene.add(rim);
-      return { hemi, key, rim };
+      return { hemi: hemi_, key, rim };
     },
   };
 })();

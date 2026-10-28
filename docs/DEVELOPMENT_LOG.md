@@ -2,6 +2,14 @@
 
 Significant milestones, decisions and open issues only. Newest first.
 
+## 2026-10-28 (later) — Tennis island art pass: trees, crowd, sky, lighting
+
+Owner request: the court should look like a professional environment artist's work next to the reference (`art/reference/Environment/Tennis/`), not a low-quality map; trees, the viewers, the sky and the lighting first.
+
+- **Island** (`art/island.py`): every tree of the model goes (faceted canopies, shading baked into the texture) and stylised coconut palms and flowering bushes are built where they stood; the spectators are remade as six species with shirts, eyes, blush, caps and flags; the island texture is colour-graded (saturation, lifted midtones) before downsizing; the palette moves to the reference's coral surround, light wood and turquoise sea; cartoon clouds ring the horizon; ball baskets replace the yellow crates; the draped blue cloths the model strung between its poles (found by near-zero fill or saturated colour), and every loose prop inside the court-and-stands band (lamp and fence posts), are removed.
+- **Rendering**: `Kit3D.skyDome` (vertex-colour gradient sphere) and lighting options on `Kit3D.lights`; Tennis uses a gradient sky, a cooler dimmer hemisphere with sea bounce, a stronger warm sun, exposure 1.12 and fog pushed to the horizon.
+- **Verified**: Blender previews; the AI demo in headless Chrome (serve, rally, point) at 61 fps with no console errors; the tennis smoke section. `assets/img/tennis.jpg` re-captured. **Not verified**: TVs and slower GPUs with the bigger crowd (~85k triangles, ~290 nodes).
+
 ## 2026-10-28 — Tennis island rebuilt, three cooking kitchens, Cooking v3
 
 Owner request: check and finish the tennis map from the source island (fix every artifact, the audience benches included, and make it feel alive), build cooking maps from the three new source dioramas to match the concept references, then take the Cooking GDD to an Overcooked 2 standard (ingredients and process, random menus, what happens to badly cooked food, tables, map choice) and implement it; push to GitHub.
