@@ -14,15 +14,33 @@
   let leaving = false;
   let lastSentKey = '';
   let lastSentAt = 0;
+  let seq = 0;          // numbers every input message, so the screen can drop late ones
+  let lastHeard = 0;    // when the screen last said anything (it answers a ping every second)
   let pingTimer = null;
   let wakeLock = null;
   let mode = 'pad'; // 'pad' or 'motion', chosen by the game on the screen
+  // The room we are in, for reconnecting by ourselves when the link drops: a few tries
+  // over ~25 s, then back to the Join screen.
+  let session = null;
+  const RETRY = [400, 1000, 2000, 3000, 5000, 6000, 8000];
+  let retryN = 0, retryTimer = null;
 
   // ---------- Storage (may be unavailable in private mode) ----------
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch (_) {} },
   };
+
+  // One id per tab (sessionStorage survives a reload): a phone that drops and comes back
+  // gets its own player back on the screen instead of a second one.
+  const cid = (() => {
+    const fresh = () => R.makeCode() + Math.random().toString(36).slice(2, 8);
+    try {
+      let id = sessionStorage.getItem('mabar.cid');
+      if (!id) { id = fresh(); sessionStorage.setItem('mabar.cid', id); }
+      return id;
+    } catch (_) { return fresh(); }
+  })();
 
   // ---------- Join screen ----------
   const codeInput = $('#codeInput');
@@ -63,11 +81,15 @@
     peer = null;
   }
 
-  async function join(code, name) {
+  // auto: a reconnect attempt (the pad stays on screen under "Reconnecting…").
+  async function join(code, name, auto = false) {
     teardown();
     leaving = false;
-    joinBtn.disabled = true;
-    setMsg('Connecting…');
+    if (!auto) {
+      session = null;
+      joinBtn.disabled = true;
+      setMsg('Connecting…');
+    }
 
     let settled = false;
     const fail = (text) => {
@@ -75,23 +97,25 @@
       settled = true;
       clearTimeout(timer);
       teardown();
+      if (auto) { retry(text); return; }
       joinBtn.disabled = false;
       setMsg(text, true);
     };
     // If the room didn't exist we'd get 'peer-unavailable' within a second or
     // two, so a timeout means we found the room but the network blocked the link.
-    const timer = setTimeout(() => fail('Found the room, but couldn’t connect from this network. Try switching between Wi-Fi and mobile data, or check the screen is still open.'), 20000);
+    const timer = setTimeout(() => fail('Found the room, but couldn’t connect from this network. Try switching between Wi-Fi and mobile data, or check the screen is still open.'), auto ? 8000 : 20000);
 
     const opts = await R.peerOptionsAsync();
     if (settled) return;
     peer = new Peer(opts);
 
     peer.on('open', () => {
-      conn = peer.connect(R.PREFIX + code, { reliable: true, metadata: { name, remote: isRemote } });
+      conn = peer.connect(R.PREFIX + code, { reliable: true, metadata: { name, remote: isRemote, cid } });
       conn.on('open', () => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        session = { code, name };
         onConnected();
       });
       conn.on('data', onData);
@@ -111,13 +135,22 @@
 
   function onConnected() {
     connected = true;
+    retryN = 0;
+    clearTimeout(retryTimer);
+    $('#reconn').hidden = true;
     joinBtn.disabled = false;
     setMsg('');
     $('#join').hidden = true;
     showMode();
     requestWakeLock();
-    resetStick();
-    pingTimer = setInterval(() => sendRaw({ t: 'ping', ts: performance.now() }), 1000);
+    releaseAll();
+    lastHeard = performance.now();
+    // A ping a second; a screen that has said nothing for 6 s is gone even if the
+    // browser hasn't noticed yet (that can take half a minute): reconnect.
+    pingTimer = setInterval(() => {
+      sendRaw({ t: 'ping', ts: performance.now() });
+      if (performance.now() - lastHeard > 6000 && document.visibilityState === 'visible') onDropped('Lost the screen.');
+    }, 1000);
     flush(true);
   }
 
@@ -126,18 +159,43 @@
     const wasLeaving = leaving;
     teardown();
     releaseAll();
+    leaving = false; // late 'close' events from the old connection are now ignored
+    if (!wasLeaving && session) { retry(text); return; }
+    toJoinScreen(wasLeaving ? '' : text + ' Tap Join to reconnect.', !wasLeaving);
+  }
+
+  // Reconnecting: every input is let go, the pad stays underneath, and the same room is
+  // tried again a few times. The screen knows this phone by its id and gives it back
+  // its seat.
+  function retry(text) {
+    clearTimeout(retryTimer);
+    if (!session || retryN >= RETRY.length) { giveUp(text); return; }
+    $('#reconn').hidden = false;
+    $('#reconnMsg').textContent = `${text || 'Lost the screen.'} Reconnecting to ${session.code}…`;
+    retryTimer = setTimeout(() => join(session.code, session.name, true), RETRY[retryN++]);
+  }
+  function giveUp(text) {
+    clearTimeout(retryTimer);
+    teardown();
+    session = null;
+    retryN = 0;
+    toJoinScreen(`${text || 'Lost the screen.'} Check it is still open, then tap Join.`, true);
+  }
+  function toJoinScreen(text, bad) {
+    $('#reconn').hidden = true;
     $('#pad').hidden = true;
     $('#motion').hidden = true;
-    $('#rotate').hidden = true;
     mode = 'pad';
     $('#join').hidden = false;
-    setMsg(wasLeaving ? '' : text + ' Tap Join to reconnect.', !wasLeaving);
+    joinBtn.disabled = false;
+    setMsg(text, bad);
     releaseWakeLock();
-    leaving = false; // late 'close' events from the old connection are now ignored
   }
+  $('#reconnStop').addEventListener('click', () => giveUp('Stopped.'));
 
   function onData(msg) {
     if (!msg || typeof msg !== 'object') return;
+    lastHeard = performance.now();
     switch (msg.t) {
       case 'welcome':
         document.documentElement.style.setProperty('--me', msg.color);
@@ -175,13 +233,16 @@
         break;
       case 'full':
         leaving = true;
+        session = null;
         onDropped('');
         setMsg('That room is full (8 players max).', true);
         break;
     }
   }
 
+  let silentUntil = 0;   // tests: a link that stalls (nothing leaves the phone for a while)
   function sendRaw(msg) {
+    if (performance.now() < silentUntil) return;
     if (conn && conn.open) {
       try { conn.send(msg); } catch (_) {}
     }
@@ -193,7 +254,7 @@
     const now = performance.now();
     const key = state.x + ',' + state.y + ',' + state.b;
     if (force || key !== lastSentKey || now - lastSentAt > 250) {
-      sendRaw({ t: 'in', x: state.x, y: state.y, b: state.b });
+      sendRaw({ t: 'in', x: state.x, y: state.y, b: state.b, s: ++seq });
       lastSentKey = key;
       lastSentAt = now;
     }
@@ -205,6 +266,7 @@
   for (const btn of document.querySelectorAll('.js-leave')) {
     btn.addEventListener('click', () => {
       leaving = true;
+      session = null;
       onDropped('');
     });
   }
@@ -221,8 +283,8 @@
     releaseAll();
     $('#pad').hidden = mode !== 'pad';
     $('#motion').hidden = mode !== 'motion';
-    checkOrientation();
-    // Motion games are played holding the phone upright; the pad wants landscape.
+    // Motion games are played holding the phone upright; the pad prefers landscape
+    // (Android in fullscreen locks it) but works upright too.
     try {
       const o = screen.orientation;
       if (o && mode === 'motion' && o.unlock) o.unlock();
@@ -232,63 +294,80 @@
   }
 
   // ---------- Stick ----------
+  // A floating stick: it centres wherever the thumb lands in the left zone (no jump to a
+  // clamped spot, so touching down never moves you), and when the thumb is dragged past
+  // the rim the stick follows it, so turning round takes the same short flick as the
+  // first push. Pointer capture keeps the thumb's moves when it wanders off the zone; a
+  // second finger still on the zone takes over when the first lifts.
   const zone = $('#stickZone');
   const base = $('#stickBase');
   const knob = $('#stickKnob');
   const DEADZONE = 0.12;
   let stickId = null;
   let cx = 0, cy = 0, maxR = 1;
+  const zoneFingers = new Map();   // pointer id -> [x, y] of every finger down on the zone
 
   function resetStick() {
     stickId = null;
     zone.classList.remove('active');
-    base.style.left = '50%';
-    base.style.top = '52%';
+    base.style.left = '';
+    base.style.top = '';
     knob.style.transform = 'translate(0px, 0px)';
     state.x = 0;
     state.y = 0;
   }
 
-  zone.addEventListener('pointerdown', (e) => {
-    if (stickId !== null) return;
-    e.preventDefault();
-    stickId = e.pointerId;
-    try { zone.setPointerCapture(e.pointerId); } catch (_) {}
-    zone.classList.add('active');
-
-    // Floating stick: the base jumps to where your thumb lands.
+  function placeBase(x, y) {
     const zr = zone.getBoundingClientRect();
-    const half = base.offsetWidth / 2;
-    maxR = half * 0.62;
-    const px = Math.max(zr.left + half * 0.6, Math.min(zr.right - half * 0.6, e.clientX));
-    const py = Math.max(zr.top + half * 0.6, Math.min(zr.bottom - half * 0.6, e.clientY));
-    base.style.left = (px - zr.left) + 'px';
-    base.style.top = (py - zr.top) + 'px';
-    cx = px;
-    cy = py;
-    moveStick(e);
+    base.style.left = (x - zr.left) + 'px';
+    base.style.top = (y - zr.top) + 'px';
+  }
+
+  function grab(id, x, y) {
+    stickId = id;
+    zone.classList.add('active');
+    maxR = base.offsetWidth / 2 * 0.62;
+    cx = x;
+    cy = y;
+    placeBase(x, y);
+    moveStick(x, y);
+  }
+
+  zone.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    try { zone.setPointerCapture(e.pointerId); } catch (_) {}
+    zoneFingers.set(e.pointerId, [e.clientX, e.clientY]);
+    if (stickId === null) grab(e.pointerId, e.clientX, e.clientY);
   });
 
   zone.addEventListener('pointermove', (e) => {
+    if (!zoneFingers.has(e.pointerId)) return;
+    zoneFingers.set(e.pointerId, [e.clientX, e.clientY]);
     if (e.pointerId !== stickId) return;
     e.preventDefault();
-    moveStick(e);
+    moveStick(e.clientX, e.clientY);
   });
 
-  const endStick = (e) => {
-    if (e.pointerId !== stickId) return;
+  function endFinger(id) {
+    if (!zoneFingers.delete(id) || id !== stickId) return;
     resetStick();
+    const next = [...zoneFingers.entries()].pop();
+    if (next) grab(next[0], next[1][0], next[1][1]);
     flush();
-  };
-  zone.addEventListener('pointerup', endStick);
-  zone.addEventListener('pointercancel', endStick);
-  zone.addEventListener('lostpointercapture', endStick);
+  }
+  for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) zone.addEventListener(ev, (e) => endFinger(e.pointerId));
 
-  function moveStick(e) {
-    let dx = e.clientX - cx;
-    let dy = e.clientY - cy;
+  function moveStick(x, y) {
+    let dx = x - cx;
+    let dy = y - cy;
     const d = Math.hypot(dx, dy);
-    if (d > maxR) { dx = dx / d * maxR; dy = dy / d * maxR; }
+    if (d > maxR) {                       // past the rim: the stick follows the thumb
+      cx = x - dx / d * maxR;
+      cy = y - dy / d * maxR;
+      dx = x - cx;
+      dy = y - cy;
+      placeBase(cx, cy);
+    }
     knob.style.transform = `translate(${dx}px, ${dy}px)`;
 
     let nx = dx / maxR, ny = dy / maxR;
@@ -334,15 +413,28 @@
     held.clear();
     state.b = 0;
     for (const el of buttons) el.classList.remove('pressed');
+    zoneFingers.clear();
     resetStick();
   }
 
   for (const el of buttons) {
     el.addEventListener('pointerdown', (e) => { e.preventDefault(); press(el, e.pointerId); });
-    el.addEventListener('pointerup', (e) => release(e.pointerId));
-    el.addEventListener('pointercancel', (e) => release(e.pointerId));
-    el.addEventListener('pointerleave', (e) => release(e.pointerId));
+    for (const ev of ['pointerup', 'pointercancel', 'pointerleave', 'lostpointercapture']) el.addEventListener(ev, (e) => release(e.pointerId));
   }
+
+  // Nothing may stay held after its finger is gone, wherever the release lands (a
+  // capture that failed, a system gesture): any pointer's end releases what it held,
+  // and when the last finger leaves the screen everything is let go.
+  const anyEnd = (e) => { endFinger(e.pointerId); release(e.pointerId); };
+  window.addEventListener('pointerup', anyEnd, true);
+  window.addEventListener('pointercancel', anyEnd, true);
+  const noFingers = (e) => {
+    if (e.touches.length || (!held.size && stickId === null)) return;
+    releaseAll();
+    flush();
+  };
+  document.addEventListener('touchend', noFingers, { passive: true });
+  document.addEventListener('touchcancel', noFingers, { passive: true });
 
   // ---------- Phone niceties ----------
   function haptic(pattern) {
@@ -370,15 +462,13 @@
     if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
   }
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && connected) requestWakeLock();
+    if (document.visibilityState === 'visible') { lastHeard = performance.now(); if (connected) requestWakeLock(); }
     if (document.visibilityState === 'hidden') { releaseAll(); flush(true); }
   });
-
-  const portrait = window.matchMedia('(orientation: portrait)');
-  function checkOrientation() {
-    $('#rotate').hidden = !(connected && mode === 'pad' && portrait.matches);
-  }
-  portrait.addEventListener('change', () => { releaseAll(); checkOrientation(); });
+  // Losing focus (a call, the notification shade, another app on top) or turning the
+  // phone (the layout moves under the fingers) lets go of everything.
+  for (const ev of ['blur', 'pagehide']) window.addEventListener(ev, () => { releaseAll(); flush(true); });
+  window.matchMedia('(orientation: portrait)').addEventListener('change', () => { releaseAll(); flush(true); });
 
   // No long-press menus, pinch zoom or double-tap zoom on the pad.
   document.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -657,6 +747,14 @@
     return { prepare, preflight, feed, state: () => ({ listening, gotData, permission, has: { ...has }, hz, gravity, inverted, tiltBase, tiltY }) };
   })();
   window.__motion = Motion; // lets tests inject fake sensor readings: feed(gyro, acc, { a, g, r })
+  // Tests: what the pad would send, the pad without a room (layout checks), a dropped link.
+  window.__pad = {
+    state: () => ({ x: state.x, y: state.y, b: state.b, seq, connected, mode, stick: stickId, fingers: zoneFingers.size, held: held.size, reconnecting: !$('#reconn').hidden, cid }),
+    show(m = 'pad') { mode = m; $('#join').hidden = true; showMode(); },
+    drop() { if (conn) try { conn.close(); } catch (_) { /* already closing */ } },
+    raw: (msg) => sendRaw(msg),
+    mute(ms) { silentUntil = performance.now() + ms; },
+  };
 
   if (codeInput.value) nameInput.focus();
 })();

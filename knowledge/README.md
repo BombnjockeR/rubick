@@ -20,3 +20,4 @@ Belongs elsewhere: architecture → `docs/ARCHITECTURE.md`, workflows → `docs/
 - [tennis-reference-footage.md](tennis-reference-footage.md) — the Switch Sports clip measured frame by frame: dive timing (air time, distance, time on the ground), what a dive returns, the lunge
 - [ball-flight-closed-form.md](ball-flight-closed-form.md) — ball flight with gravity, linear drag and spin in closed form: launch velocity, net crossing, apex, choosing the flight time
 - [phone-motion-sensors.md](phone-motion-sensors.md) — **proposed**: how swing direction and tilt are read from `devicemotion`, and the sign conventions to check on real phones
+- [touch-controller-and-input-link.md](touch-controller-and-input-link.md) — what made the old touch stick misbehave (measured), PeerJS 1.5.5's `reliable` flag, testing touch and two pages at once with CDP

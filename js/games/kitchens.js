@@ -13,6 +13,9 @@
 //   W  serving hatch                  X  bin
 //   crates: r rice  n noodles  v vegetables  t tofu  f fish  q squid  s shrimp
 //           k crab  c chili  l citrus  p peanut sauce
+// `clear` lists tiles (col, row) whose own props the asset script removes: the
+// source dioramas paint stoves, woks and food crates that do nothing in the game
+// (and some stand where chefs walk), so they would read as stations or crates.
 // `level` + `scale` + `x0`/`y0` place the source model on this grid (the fitted
 // tilt of the AI-generated diorama, the metres per model unit, and where tile
 // (0,0)'s top-left corner falls in the levelled model); `spawns` are chef start
@@ -29,6 +32,7 @@ window.MabarKitchens = {
     "sky": "#cfe9ff", "sun": [6, 12, 5],
     "recipes": ["gado", "liwet", "tahu"],
     "spawns": [[6, 3], [6, 5], [2, 6], [11, 7]],
+    "clear": [[2, 7], [3, 7], [4, 7], [9, 7], [10, 7], [11, 7], [9, 8], [10, 8]],
     "map": [
       "~~~~~~~~~~~~~",
       "~~~~~~~~~~~~~",
@@ -36,8 +40,8 @@ window.MabarKitchens = {
       "~~~~.......~~",
       "~~~.CFBPX#.~~",
       "~rS........~~",
-      "#....~~.~~..c",
-      "B....~~.~~..p",
+      "#....~=~~~..c",
+      "B....~=~~~..p",
       "~vt#.......#~",
       "~~~~~#W##~~~~",
       "~~~~~~~~~~~~~",
@@ -56,6 +60,7 @@ window.MabarKitchens = {
     "sky": "#bfe8ff", "sun": [7, 12, 4],
     "recipes": ["ikan", "cumi", "udang"],
     "spawns": [[8, 3], [8, 5], [8, 9], [8, 11]],
+    "clear": [[2, 7], [3, 7], [4, 6], [4, 7], [5, 6], [5, 7], [11, 7], [12, 7]],
     "map": [
       "~~~~~~~~~~~~~~~~",
       "~~~~~~~~~~~~~~~~",
@@ -89,6 +94,7 @@ window.MabarKitchens = {
     "sky": "#ffd9b8", "sun": [-6, 10, 7],
     "recipes": ["bakmi", "selade", "jeruk"],
     "spawns": [[8, 3], [8, 5], [4, 9], [12, 9]],
+    "clear": [[2, 6], [2, 7], [2, 8], [3, 6], [3, 7], [3, 8], [4, 6], [4, 7], [4, 8], [12, 6], [12, 7], [12, 8], [13, 6], [13, 7], [13, 8]],
     "map": [
       "~~~~~~~~~~~~~~~~",
       "~~~~~~~~~~~~~~~~",

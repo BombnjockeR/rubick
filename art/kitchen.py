@@ -103,10 +103,12 @@ def veg(g, z=0.0, state=None):
             a = i / 5 * TAU
             g.sphere(0.05, (math.cos(a) * 0.035, math.sin(a) * 0.035, z + 0.07), mat('#e9f2cf', rough=0.6), scale=(0.7, 0.7, 1.6), seg=8)
             g.sphere(0.055, (math.cos(a) * 0.06, math.sin(a) * 0.06, z + 0.16), GREEN_D, scale=(1, 1, 0.55), seg=8, rot=(0.4 * math.sin(a), -0.4 * math.cos(a), 0))
-    else:
+    else:                                                                            # chopped; boiled = wilted, darker, glossy
+        light, dark = (GREEN, GREEN_D) if state == 'cut' else (mat('#4f9a3a', rough=0.3), mat('#3c7f30', rough=0.3))
         for i in range(6):
             a = i / 6 * TAU
-            g.sphere(0.045, (math.cos(a) * 0.05, math.sin(a) * 0.05, z + 0.03), GREEN if i % 2 else GREEN_D, scale=(1.3, 1, 0.45), seg=8, rot=(0, 0, a))
+            g.sphere(0.045, (math.cos(a) * 0.05, math.sin(a) * 0.05, z + 0.03), light if i % 2 else dark,
+                     scale=(1.3, 1, 0.45 if state == 'cut' else 0.3), seg=8, rot=(0, 0, a))
 
 
 def tofu(g, z=0.0, state=None):
@@ -174,11 +176,14 @@ def chili(g, z=0.0, state=None):
             a = i / 4 * TAU + 0.3
             g.sphere(0.03, (math.cos(a) * 0.05, math.sin(a) * 0.05, z + 0.03), RED, scale=(3.2, 0.8, 0.8), seg=8, rot=(0, 0, a))
             g.cyl(0.008, 0.03, (math.cos(a) * 0.05 - math.cos(a) * 0.1, math.sin(a) * 0.05 - math.sin(a) * 0.1, z + 0.03), GREEN_D, seg=5, rot=(0, PI / 2, a))
-    else:
+    else:                                                                            # chopped rings; boiled = in a sambal puddle
+        col = RED if state == 'cut' else mat('#b5221a', rough=0.25)
+        if state == 'cooked':
+            g.cyl(0.085, 0.008, (0, 0, z + 0.004), mat('#c4381f', rough=0.2), seg=16)
         for i in range(9):
             a = i / 9 * TAU
             r = 0.04 + 0.03 * (i % 2)
-            g.cyl(0.018, 0.012, (math.cos(a) * r, math.sin(a) * r, z + 0.006), RED, seg=8)
+            g.cyl(0.018, 0.012, (math.cos(a) * r, math.sin(a) * r, z + 0.006 + (0.006 if state == 'cooked' else 0)), col, seg=8)
 
 
 def citrus(g, z=0.0, state=None):
@@ -202,13 +207,13 @@ def peanut(g, z=0.0, state=None):
 INGREDIENTS = {
     'rice': (rice, (None, 'rinsed', 'cooked')),
     'noodles': (noodles, (None, 'cooked')),
-    'veg': (veg, (None, 'cut')),
+    'veg': (veg, (None, 'cut', 'cooked')),
     'tofu': (tofu, (None, 'cut', 'cooked', 'fried')),
     'fish': (fish, (None, 'cut', 'cooked')),
     'squid': (squid, (None, 'cut', 'fried')),
     'shrimp': (shrimp, (None, 'cut', 'cooked')),
     'crab': (crab, (None, 'cut', 'cooked')),
-    'chili': (chili, (None, 'cut')),
+    'chili': (chili, (None, 'cut', 'cooked')),
     'citrus': (citrus, (None, 'cut')),
     'peanut': (peanut, (None,)),
 }

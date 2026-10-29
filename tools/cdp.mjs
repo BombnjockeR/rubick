@@ -41,8 +41,10 @@ export async function launch({ port = 9333, width = 1280, height = 720, args = [
   });
 
   // block: URL patterns that fail to load (e.g. ['*bunny.glb']) to test fallbacks.
-  async function page(url, { w = width, h = height, block = [] } = {}) {
-    const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
+  // mobile: a touch phone (touch events, mobile viewport, 2x pixels). window: its own window, so it
+  // stays visible (and its requestAnimationFrame loop runs) next to another page.
+  async function page(url, { w = width, h = height, block = [], mobile = false, window = false } = {}) {
+    const { targetId } = await send('Target.createTarget', { url: 'about:blank', newWindow: window });
     const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
     const s = (method, params) => send(method, params, sessionId);
     const log = [];
@@ -73,7 +75,10 @@ export async function launch({ port = 9333, width = 1280, height = 720, args = [
     await s('Network.enable');
     await s('Log.enable');
     await s('Page.enable');
-    await s('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false });
+    const metrics = (mw, mh) => s('Emulation.setDeviceMetricsOverride', { width: mw, height: mh, deviceScaleFactor: mobile ? 2 : 1, mobile,
+      screenOrientation: mw > mh ? { type: 'landscapePrimary', angle: 90 } : { type: 'portraitPrimary', angle: 0 } });
+    await metrics(w, h);
+    if (mobile) await s('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
     if (block.length) await s('Network.setBlockedURLs', { urls: block });
     await s('Page.navigate', { url });
     const api = {
@@ -97,6 +102,10 @@ export async function launch({ port = 9333, width = 1280, height = 720, args = [
         const r = await s('Page.captureScreenshot', { format: 'png' });
         writeFileSync(file, Buffer.from(r.data, 'base64'));
       },
+      // Touch: type touchStart | touchMove | touchEnd | touchCancel; points [{ x, y, id }] = every
+      // finger still down after this event (touchEnd / touchCancel: the fingers that stay).
+      touch: (type, points = []) => s('Input.dispatchTouchEvent', { type, touchPoints: points.map(({ x, y, id }) => ({ x, y, id, radiusX: 4, radiusY: 4, force: 1 })) }),
+      resize: (mw, mh) => metrics(mw, mh),
       async key(code, holdMs = 60) {
         const [key, vk] = KEYS[code];
         await s('Input.dispatchKeyEvent', { type: 'keyDown', code, key, windowsVirtualKeyCode: vk });

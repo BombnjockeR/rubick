@@ -15,6 +15,13 @@
 // kitchens float as miniature dioramas on cards, main-menu style, and the team picks
 // one (no reading: left / right and A) -> 3-2-1 -> the shift -> stars -> the room.
 //
+// Seats: the host sets the room to 2 or 4 chefs and the AI teammates to Easy or Hard.
+// Phones take seats in join order; every other open seat gets an AI chef
+// (js/games/chefai.js) unless the host closes it (x / +, keys 1-4). A phone that joins
+// takes over an AI chef, one that leaves mid-shift is taken over by one. AI chefs play
+// through the same input as a phone. "Start now" (F) goes to the kitchen pick at once,
+// or with nobody joined runs an AI-only shift that repeats (F: back to the room).
+//
 // Controls (phone gamepad): stick/d-pad move, A pick up / put down / use,
 // X (hold) chop, rinse or scrape a burnt pot, B dash. Laptop: WASD, Space, X, E.
 //
@@ -39,7 +46,10 @@ MabarGames.register({
     const BOIL = 8, BOIL_GRACE = 12, FRY = 6, FRY_GRACE = 10;    // seconds to cook, then to burn
     const CHOP = 1.6, RINSE = 1.4, SCRAPE = 2.0;                 // seconds of holding X
     const POT_MAX = 3, PLATE_MAX = 4, PLATES = 5, PLATE_RETURN = 9;
-    const MAX_CHEFS = 4, SPEED = 3.6, RADIUS = 0.3, DASH = 0.2, DASH_CD = 0.75, DASH_SPEED = 7.5;
+    const SEATS = 4, SPEED = 3.6, RADIUS = 0.3, DASH = 0.2, DASH_CD = 0.75, DASH_SPEED = 7.5;
+    const STICK_DEAD = 0.05;                                     // the phone already has its own dead zone
+    const AI = window.MabarChefAI;
+    const AI_COLORS = ['#b197fc', '#ff922b', '#38d9a9', '#f783ac'];   // the hub's slot 5-8 colours, by seat
     const TOP = 0.55;                                            // counter height (art/kitchen.py)
     const CHAR_SCALE = 1.3;                                      // the animals are 1 m tall at scale 1
     const ANIMALS = ['bunny', 'dog', 'cat', 'panda', 'chimp', 'lioness'];   // one per seat slot, like the racket games
@@ -90,9 +100,16 @@ MabarGames.register({
       { gap: 16, max: 5, patience: 1.0 },
       { gap: 13, max: 5, patience: 1.0 },
     ];
-    const paceFor = (n) => PACE[Math.max(0, Math.min(3, n - 1))];
+    const paceFor = (n) => PACE[Math.max(0, Math.min(3, Math.floor(n + 0.25) - 1))];   // a team of 1.5 (one + Easy AI) is paced as one
     // Three stars = what a team of n should manage in a shift (first guesses, not playtested).
     const par = (n) => (6 + 3 * (Math.max(1, n) - 1)) * 26;
+    // The team's size for pacing and stars: an AI chef counts as part of one (Easy 0.5,
+    // Hard 0.85), so a solo player with AI help is not paced like four people.
+    function teamSize() {
+      let n = 0;
+      for (const c of chefs.values()) n += c.ai && AI ? AI.LEVELS[level].weight : 1;
+      return Math.max(1, n);
+    }
 
     const sortedKey = (parts) => [...parts].sort().join(',');
     const RECIPE_KEYS = {};
@@ -117,6 +134,11 @@ MabarGames.register({
     const walkable = (ch) => ch === '.' || ch === '=';
 
     let chefs, orders, phase, phaseT, roomT, score, served, failed, combo, bestCombo, nextOrderT, shiftT, platesOut, plateReturns, orderCount;
+    let flat = [];             // every tile, for the AI's look around the kitchen
+    let servedLog = [];        // recipe ids served this shift (tests)
+    let frameNo = 0;
+    let roomSize = SEATS, level = 'easy', demo = false;
+    const seatOff = [false, false, false, false];   // the host closed this seat: no AI chef in it
     const votes = new Set();
     const popups = [];
     const bell = [];           // serving animation: plates sliding away
@@ -142,36 +164,63 @@ MabarGames.register({
         pot: ch === 'C' ? { items: [], t: 0, state: 'empty' } : null,          // state: empty | cooking | done | burnt
         fryer: ch === 'F' ? { item: null, t: 0, state: 'empty' } : null,
       })));
+      flat = tiles.flat();
       orders = [];
       score = 0; served = 0; failed = 0; combo = 0; bestCombo = 0; orderCount = 0;
       platesOut = 0; plateReturns = [];
+      servedLog = [];
       nextOrderT = 2;
       if (chefs) for (const ch of chefs.values()) { ch.hold = null; ch.working = 0; }
     }
 
-    // ---------------- chefs ----------------
-    chefs = new Map(); // player id -> chef
+    // ---------------- chefs and seats ----------------
+    // Seat i (0 .. roomSize-1) starts at the kitchen's spawn i. Phones take seats in join
+    // order: an AI chef's first (they take it over where it stands, with what it holds),
+    // then a closed one; every open seat left has an AI chef. Seats only change between
+    // shifts; mid-shift a phone that leaves is replaced by an AI chef on the spot.
+    chefs = new Map(); // player id (AI chefs: 'ai<seat>') -> chef
 
     function spawnOf(i) {
       const s = kit.spawns[i % kit.spawns.length];
       return [tileX(s[0]), tileZ(s[1])];
     }
+    const slotAnimal = (slot) => ANIMALS[((slot % ANIMALS.length) + ANIMALS.length) % ANIMALS.length];
+    const CRATE_OF = Object.fromEntries(Object.entries(CRATE).map(([k, v]) => [v, k]));
 
-    function addChef(p) {
-      if (chefs.has(p.id) || chefs.size >= MAX_CHEFS) return;
-      const used = new Set([...chefs.values()].map((c) => c.spawn));
-      const spawn = [0, 1, 2, 3].find((i) => !used.has(i));
-      const [x, z] = spawnOf(spawn);
-      chefs.set(p.id, {
-        id: p.id, spawn, slot: p.slot, x, z, fx: 0, fz: 1, vx: 0, vz: 0, dash: 0, dashCd: 0,
-        hold: null, working: 0, workKind: '', color: p.color, name: p.name, bump: 0,
-      });
-      buildChef3D(p.id);
+    function newChef(id, seat, who) {
+      const [x, z] = spawnOf(seat);
+      const ch = {
+        id, spawn: seat, slot: who.slot, x, z, fx: 0, fz: 1, vx: 0, vz: 0, dash: 0, dashCd: 0,
+        hold: null, working: 0, workKind: '', color: who.color, name: who.name, bump: 0, served: 0,
+        animal: who.slot >= 0 ? slotAnimal(who.slot) : null, ai: null, pad: null, prevB: 0,
+      };
+      chefs.set(id, ch);
+      return ch;
+    }
+    const aiLook = (seat) => ({ slot: -1, color: AI_COLORS[seat], name: `CPU ${seat + 1}` });
+    function makeAI(ch) { ch.ai = AI.brain(world, ch, level); ch.pad = { sx: 0, sy: 0, b: 0 }; ch.prevB = 0; }
+    function addAI(seat) { if (AI) makeAI(newChef(`ai${seat}`, seat, aiLook(seat))); }
+    // A chef changes hands where it stands (with whatever it carries).
+    function rekey(ch, id) { drop3D(ch.id); chefs.delete(ch.id); ch.id = id; chefs.set(id, ch); }
+    function toAI(ch) {
+      if (!AI) { removeChef(ch.id); return; }
+      const was = ch.slot;                             // a phone that comes back gets this chef again
+      rekey(ch, `ai${ch.spawn}`);
+      Object.assign(ch, aiLook(ch.spawn), { animal: null, working: 0, was });
+      makeAI(ch);
+    }
+    function toHuman(ch, p) {
+      rekey(ch, p.id);
+      Object.assign(ch, { slot: p.slot, color: p.color, name: p.name, animal: slotAnimal(p.slot), ai: null, pad: null, prevB: 0, working: 0, was: -1 });
     }
     function removeChef(id) {
       const ch = chefs.get(id);
       if (!ch) return;
+      if (isPlate(ch.hold)) platesOut--;               // a carried plate goes back on the stack
       chefs.delete(id);
+      drop3D(id);
+    }
+    function drop3D(id) {
       const o = chefObjs.get(id);
       if (o) { if (o.ch) o.ch.dispose(); if (scene) scene.remove(o.root); }
       chefObjs.delete(id);
@@ -179,9 +228,74 @@ MabarGames.register({
       if (hl && scene) scene.remove(hl);
       highlights.delete(id);
     }
-    function respawnChefs() {
-      for (const ch of chefs.values()) { const [x, z] = spawnOf(ch.spawn); ch.x = x; ch.z = z; ch.fx = 0; ch.fz = 1; ch.hold = null; ch.working = 0; }
+    const seatTaken = (i) => [...chefs.values()].find((c) => c.spawn === i) || null;
+
+    // Brings the chefs in line with who is connected and the host's seat choices.
+    function seatChefs() {
+      if (!kit) return;
+      const between = !(phase === 'play' || phase === 'over');
+      for (const ch of [...chefs.values()]) {
+        if (ch.ai || hub.players.has(ch.id)) continue;
+        if (between) removeChef(ch.id); else toAI(ch);   // left: an AI chef carries on mid-shift
+      }
+      if (between) {
+        for (const ch of [...chefs.values()]) {
+          if (ch.spawn >= roomSize || (ch.ai && seatOff[ch.spawn])) removeChef(ch.id);   // room got smaller, seat closed
+        }
+      }
+      for (const p of [...hub.players.values()].sort((a, b) => a.slot - b.slot)) {
+        if (chefs.has(p.id)) continue;
+        let seat = -1;
+        const mine = [...chefs.values()].find((c) => c.ai && c.was === p.slot && c.spawn < roomSize);
+        if (mine) seat = mine.spawn;
+        for (let i = 0; i < roomSize && seat < 0; i++) if (seatTaken(i) && seatTaken(i).ai) seat = i;
+        for (let i = 0; i < roomSize && seat < 0; i++) if (!seatTaken(i)) seat = i;
+        if (seat < 0) continue;                          // the kitchen is full: this phone watches
+        const ai = seatTaken(seat);
+        if (ai) toHuman(ai, p); else newChef(p.id, seat, p);
+      }
+      if (between) for (let i = 0; i < roomSize; i++) if (!seatOff[i] && !seatTaken(i)) addAI(i);
+      // AI chefs take the animals nobody's phone has (like the racket games)
+      const used = new Set([...chefs.values()].filter((c) => !c.ai).map((c) => c.animal));
+      for (const c of [...chefs.values()].filter((x) => x.ai).sort((a, b) => a.spawn - b.spawn)) {
+        const want = c.animal && !used.has(c.animal) ? c.animal : ANIMALS.find((a) => !used.has(a)) || ANIMALS[c.spawn];
+        if (want !== c.animal) { c.animal = want; drop3D(c.id); }
+        used.add(want);
+      }
+      for (const id of chefs.keys()) if (!chefObjs.has(id)) buildChef3D(id);
     }
+    function respawnChefs() {
+      for (const ch of chefs.values()) {
+        const [x, z] = spawnOf(ch.spawn);
+        Object.assign(ch, { x, z, fx: 0, fz: 1, hold: null, working: 0, served: 0 });
+        if (ch.ai) ch.ai.reset();
+      }
+    }
+    const lineup = () => {
+      const all = [...chefs.values()];
+      return { humans: all.filter((c) => !c.ai).length, ai: all.filter((c) => c.ai).length };
+    };
+
+    // What an AI chef may look at and use: the same tiles, rules and helpers as a player.
+    const world = {
+      B, ING, RECIPES, POT_MAX, PLATE_MAX, BOIL, BOIL_GRACE, FRY, FRY_GRACE,
+      phase: () => phase,
+      frame: () => frameNo,
+      orders: () => orders,
+      tiles: () => flat,
+      chefs: () => [...chefs.values()],
+      rows: () => ROWS,
+      cols: () => COLS,
+      walk: (c, r) => { const t = tileAt(c, r); return !!t && !t.solid; },
+      tileX, tileZ, toC, toR, isPlate,
+      platesFree: () => platesFree(),
+      targetOf: (ch) => targetOf(ch),
+      crateOf: (type) => CRATE_OF[type],
+      needsWork: (t) => !!t.item && !isPlate(t.item) && t.item.state === 'raw'
+        && ((t.ch === 'B' && ING[t.item.type].prep === 'board') || (t.ch === 'S' && t.item.type === 'rice')),
+      menuParts: () => kit.recipes.flatMap((id) => partsOf(id, RECIPES[id].spicy ? 'pedas' : RECIPES[id].extra ? 'extra' : null)),
+      home: (ch) => kit.spawns[ch.spawn % kit.spawns.length].slice(),
+    };
 
     // What the chef is facing: the best solid tile in front of them.
     function targetOf(ch) {
@@ -239,27 +353,27 @@ MabarGames.register({
       return 'Already cooked';
     }
 
+    // Clean plates on the stack: served ones come back PLATE_RETURN seconds later.
+    const platesFree = () => PLATES - platesOut - plateReturns.length;
+
     function interact(ch) {
       const t = targetOf(ch);
       if (!t) return;
       const h = ch.hold;
       const X = tileX(t.c), Z = tileZ(t.r);
-      if (CRATE[t.ch]) {
-        if (!h) { ch.hold = newItem(CRATE[t.ch]); rumble(ch, 12); }
-        else if (!t.item) { t.item = h; ch.hold = null; }           // a crate's rim holds one thing too
-        else if (isPlate(h) && !isPlate(t.item)) { if (addToPlate(h, t.item, X, Z)) t.item = null; }
-        return;
-      }
+      // An empty-handed chef gets a fresh ingredient from a crate; anything set on its rim
+      // is a counter's (taken first, combined with a plate, below).
+      if (CRATE[t.ch] && !h && !t.item) { ch.hold = newItem(CRATE[t.ch]); rumble(ch, 12); return; }
       switch (t.ch) {
         case 'P': {
           if (!h) {
-            if (platesOut >= PLATES) { say('No clean plates yet', X, Z, '#ffd32a'); return; }
+            if (platesFree() <= 0) { say('No clean plates yet', X, Z, '#ffd32a'); return; }
             platesOut++;
             ch.hold = newItem('plate');
             rumble(ch, 12);
           } else if (isPlate(h) && !h.parts.length) { platesOut--; ch.hold = null; }   // a clean plate back on the stack
           else if (!isPlate(h)) {
-            if (platesOut >= PLATES) { say('No clean plates yet', X, Z, '#ffd32a'); return; }
+            if (platesFree() <= 0) { say('No clean plates yet', X, Z, '#ffd32a'); return; }
             const pl = newItem('plate');                              // straight onto a fresh plate
             if (addToPlate(pl, h, X, Z)) { platesOut++; ch.hold = pl; }
           }
@@ -389,6 +503,8 @@ MabarGames.register({
       const bonus = combo >= 5 ? 10 : combo >= 3 ? 5 : 0;
       score += 20 + tip + bonus;
       served++;
+      ch.served = (ch.served || 0) + 1;
+      servedLog.push(`${m.id}${m.variant ? ':' + m.variant : ''}${ch.ai ? '@ai' : ''}`);
       orders.splice(i, 1);
       ch.hold = null;
       platesOut--;
@@ -419,7 +535,7 @@ MabarGames.register({
     }
     function addOrder(forced) {
       const { id, variant } = forced || pickOrder();
-      const life = RECIPES[id].life * paceFor(chefs.size).patience * (variant ? 1.1 : 1);
+      const life = RECIPES[id].life * paceFor(teamSize()).patience * (variant ? 1.1 : 1);
       orders.push({ uid: uid++, id, variant, t: 0, life, parts: partsOf(id, variant), born: performance.now() });
       orderCount++;
     }
@@ -428,10 +544,40 @@ MabarGames.register({
     function toRoom() {
       phase = 'room';
       roomT = ROOM_TIME;
+      demo = false;
       votes.clear();
       resetKitchen();
+      seatChefs();
       respawnChefs();
       hub.showLobby(false, false);
+    }
+    // "Start now": the team goes to the kitchen pick without waiting for votes; with
+    // nobody joined, the AI chefs cook a shift on their own (and the next, on the next map).
+    function forceStart() {
+      if (phase !== 'room') return;
+      if (hub.players.size) { toPick(); return; }
+      if (!roomSize || seatOff.slice(0, roomSize).every(Boolean)) seatOff.fill(false);
+      demo = true;
+      seatChefs();
+      startShift();
+    }
+    function toggleSeat(i) {
+      if (phase !== 'room' || i >= roomSize) return;
+      const ch = seatTaken(i);
+      if (ch && !ch.ai) return;                          // a phone sits here
+      seatOff[i] = !seatOff[i];
+      seatChefs();
+    }
+    function setRoomSize(n) {
+      if (phase !== 'room' || (n !== 2 && n !== 4) || n === roomSize) return;
+      roomSize = n;
+      seatChefs();
+      respawnChefs();
+    }
+    function setLevel(id) {
+      if (!AI || !AI.LEVELS[id] || id === level) return;
+      level = id;
+      for (const ch of chefs.values()) if (ch.ai) ch.ai.setLevel(id);
     }
     // Everyone is in: choose the kitchen together (the 3D cards, below).
     function toPick() {
@@ -477,7 +623,7 @@ MabarGames.register({
       for (const p of hub.players.values()) hub.rumble(p, 40);
     }
     function stars() {
-      const p = par(Math.max(1, chefs.size));
+      const p = par(teamSize());
       return score >= p ? 3 : score >= p * 0.65 ? 2 : score >= p * 0.35 ? 1 : 0;
     }
     function endShift() {
@@ -822,7 +968,7 @@ MabarGames.register({
       return sp;
     }
 
-    const animalFor = (ch) => (window.MabarChars && MabarChars.ready(ANIMALS[ch.slot % ANIMALS.length]) ? ANIMALS[ch.slot % ANIMALS.length]
+    const animalFor = (ch) => (window.MabarChars && ch.animal && MabarChars.ready(ch.animal) ? ch.animal
       : window.MabarChars ? ANIMALS.find((id) => MabarChars.ready(id)) || null : null);
 
     function buildChef3D(id) {
@@ -875,11 +1021,18 @@ MabarGames.register({
       return partKey(it);
     }
 
-    function buildItem(it) {
-      if (!isPlate(it)) {
-        const st = it.state === 'raw' ? '' : `_${it.state}`;
-        return tpl(`i_${it.type}${st}`);
+    // An ingredient's model in a state; a kitchen.glb without that state shows the
+    // nearest one it has (chopped, then whole) instead of nothing.
+    function ingredient(type, state) {
+      for (const st of [state, 'cut', 'raw']) {
+        const name = `i_${type}${st === 'raw' ? '' : `_${st}`}`;
+        if (kitAsset && kitAsset.scene.getObjectByName(name)) return tpl(name);
       }
+      return new THREE.Group();
+    }
+
+    function buildItem(it) {
+      if (!isPlate(it)) return ingredient(it.type, it.state);
       const g = new THREE.Group();
       const m = matchRecipe(it);
       if (m) {
@@ -895,7 +1048,7 @@ MabarGames.register({
       g.add(tpl('i_plate'));
       it.parts.forEach((k, i) => {
         const [type, state] = k.split(':');
-        const o = tpl(`i_${type}${state === 'raw' ? '' : `_${state}`}`);
+        const o = ingredient(type, state);
         const a = i * 2.1 + 0.4, r = it.parts.length > 1 ? 0.07 : 0;
         o.position.set(Math.cos(a) * r, 0.025, Math.sin(a) * r);
         o.scale.setScalar(0.62);
@@ -1182,7 +1335,9 @@ MabarGames.register({
       ctx.fillText(combo >= 3 ? `COMBO ×${combo}` : `${kit.name.toUpperCase()} · ${hub.code || '····'}`, W - 104, 104);
       ctx.fillStyle = 'rgba(255,255,255,0.45)';
       ctx.font = hub.font(600, 10);
-      ctx.fillText('H for the QR', W - 104, 122);
+      const { humans, ai } = lineup();
+      const who = demo ? 'AI demo · F: back to the room' : ai ? `${humans} + ${ai} AI (${AI.LEVELS[level].name}) · H: QR` : 'H for the QR';
+      ctx.fillText(who, W - 104, 122, 164);
     }
 
     function card(ctx, lines, wMax = 560) {
@@ -1208,16 +1363,31 @@ MabarGames.register({
       });
     }
 
-    // The waiting room: join QR, the clock, who's in, votes. The kitchen is chosen
-    // next, together, on the 3D cards.
+    // The waiting room: join QR, the clock, the seats (phones, AI chefs, closed seats),
+    // the room size and AI level, votes. The kitchen is chosen next, together, on the
+    // 3D cards. The host clicks the seats and buttons (or keys 1-4, R, L, F).
+    let roomHits = [], hoverHit = null;
+    function pill(ctx, x, y, w, h, text, on, act, key) {
+      const hov = hoverHit && hoverHit.key === key;
+      rr(ctx, x, y, w, h, h / 2);
+      ctx.fillStyle = on ? '#1d2433' : hov ? '#e9e3d9' : '#f3efe8';
+      ctx.fill();
+      ctx.fillStyle = on ? '#ffffff' : '#5d584f';
+      ctx.font = hub.font(700, 13);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, x + w / 2, y + h / 2 + 1);
+      roomHits.push({ x, y, w, h, act, key });
+    }
     function drawRoomCard(ctx) {
       const { W, H } = hub;
-      const chefsIn = [...chefs.values()].sort((a, b) => a.slot - b.slot);
-      const n = chefsIn.length;
+      const { humans, ai } = lineup();
       const need = [...hub.players.keys()].filter((id) => !votes.has(id)).length;
+      const lvl = AI ? AI.LEVELS[level].name : 'off';
       const wide = W >= 820;
-      const cw = Math.min(760, W - 32), chh = wide ? 296 : 540;
-      const x0 = (W - cw) / 2, y0 = Math.max(14, (H - chh) / 2);
+      const cw = Math.min(800, W - 32), chh = wide ? 404 : 690;
+      const x0 = (W - cw) / 2, y0 = Math.max(12, (H - chh) / 2);
+      roomHits = [];
       ctx.save();
       ctx.shadowColor = 'rgba(0,0,0,0.25)';
       ctx.shadowBlur = 30;
@@ -1228,42 +1398,99 @@ MabarGames.register({
       rr(ctx, x0, y0, cw, 8, [24, 24, 0, 0]);
       ctx.fillStyle = '#ff4b3e';
       ctx.fill();
-      const qs = wide ? 180 : 150;
-      const qx = wide ? x0 + 30 : x0 + (cw - qs) / 2, qy = y0 + 36;
+      const qs = wide ? 190 : 150;
+      const qx = wide ? x0 + 30 : x0 + (cw - qs) / 2, qy = y0 + (wide ? 64 : 30);
       hub.drawJoin(ctx, qx, qy, qs, { label: 'Scan with your phone to join' });
       const rx = wide ? qx + qs + 30 : x0 + 20, rw = wide ? cw - (rx - x0) - 26 : cw - 40;
       const cx = rx + rw / 2;
-      let y = wide ? y0 + 50 : qy + qs + 86;
+      let y = wide ? y0 + 46 : qy + qs + 84;
       const line = (t, size, weight, color, gap = 28) => {
         ctx.font = hub.font(weight, size);
         ctx.fillStyle = color;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(t, cx, y);
+        ctx.fillText(t, cx, y, rw);
         y += gap;
       };
-      line('COOKING', 28, 800, '#ff4b3e', 36);
-      line(n ? `Kitchen opens in ${Math.ceil(roomT)}s` : 'Waiting for the first chef', 20, 800, '#1d2433', 40);
-      // who's in: a chip per chef, in their colour
-      ctx.font = hub.font(700, 13);
-      const chips = chefsIn.map((c) => ({ c, w: Math.min(140, ctx.measureText(c.name).width) + 38 }));
-      const total = chips.reduce((a, b) => a + b.w + 8, -8);
-      let px = cx - total / 2;
-      for (const { c, w } of chips) {
-        rr(ctx, px, y - 15, w, 30, 15);
-        ctx.fillStyle = '#f3efe8';
-        ctx.fill();
-        ctx.fillStyle = c.color;
-        ctx.beginPath(); ctx.arc(px + 15, y, 6, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = '#1d2433';
-        ctx.textAlign = 'left';
-        ctx.fillText(c.name, px + 27, y + 1, w - 34);
-        px += w + 8;
+      line('COOKING', 28, 800, '#ff4b3e', 34);
+      line(humans ? `Kitchen opens in ${Math.ceil(roomT)}s` : 'Waiting for the first chef', 19, 800, '#1d2433', 30);
+      // the lineup at a glance (also what the seats below show)
+      line(`Players: ${humans + ai}/${roomSize} | Human: ${humans} | AI: ${ai} | Free: ${roomSize - humans - ai} | Difficulty: ${lvl}`, 13, 700, '#5d584f', 24);
+      // seats: a phone's chef, an AI chef (x closes the seat) or a closed seat (+ opens it)
+      const gap = 8, sw = Math.min(140, (rw - gap * (roomSize - 1)) / roomSize), sh = 84;
+      const sx0 = cx - (sw * roomSize + gap * (roomSize - 1)) / 2, sy = y + 12;
+      for (let i = 0; i < roomSize; i++) {
+        const sx = sx0 + i * (sw + gap), c = seatTaken(i);
+        const def = c && window.MabarChars && MabarChars.defs[c.animal];
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#b3aa9c';
+        ctx.font = hub.font(700, 10);
+        ctx.fillText((def ? def.name : `Seat ${i + 1}`).toUpperCase(), sx + sw / 2, sy - 9);
+        if (c && !c.ai) {
+          rr(ctx, sx, sy, sw, sh, 14); ctx.fillStyle = '#f3efe8'; ctx.fill();
+          ctx.fillStyle = c.color;
+          ctx.beginPath(); ctx.arc(sx + sw / 2, sy + 22, 10, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#1d2433';
+          ctx.font = hub.font(700, 14);
+          ctx.fillText(c.name, sx + sw / 2, sy + 47, sw - 12);
+          const voted = votes.has(c.id);
+          ctx.fillStyle = voted ? '#1fae4b' : '#9a9286';
+          ctx.font = hub.font(600, 11);
+          ctx.fillText(voted ? '✓ voted' : 'phone', sx + sw / 2, sy + 68);
+          continue;
+        }
+        const open = !!c;
+        if (open) { rr(ctx, sx, sy, sw, sh, 14); ctx.fillStyle = '#eef3fb'; ctx.fill(); }
+        ctx.setLineDash([5, 5]);
+        ctx.strokeStyle = open ? '#c9d3e3' : '#e3ddd3';
+        rr(ctx, sx + 0.5, sy + 0.5, sw - 1, sh - 1, 14); ctx.stroke();
+        ctx.setLineDash([]);
+        if (open) {
+          ctx.fillStyle = c.color;
+          ctx.beginPath(); ctx.arc(sx + sw / 2, sy + 22, 10, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#ffffff';
+          ctx.font = hub.font(800, 10);
+          ctx.fillText('AI', sx + sw / 2, sy + 23);
+        }
+        ctx.fillStyle = open ? '#3f4a5e' : '#cfc8bc';
+        ctx.font = hub.font(700, 14);
+        ctx.fillText(open ? c.name : 'Closed', sx + sw / 2, sy + 47, sw - 12);
+        ctx.font = hub.font(600, 11);
+        ctx.fillStyle = open ? '#7d8799' : '#cfc8bc';
+        ctx.fillText(open ? `AI · ${lvl}` : 'no chef here', sx + sw / 2, sy + 68);
+        const bx = sx + sw - 14, by = sy + 14, hov = hoverHit && hoverHit.key === `seat${i}`;
+        ctx.fillStyle = hov ? (open ? '#ff6b6b' : '#1fae4b') : open ? '#d6deeb' : '#e3ddd3';
+        ctx.beginPath(); ctx.arc(bx, by, 10, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = hov ? '#ffffff' : '#5d584f';
+        ctx.font = hub.font(800, 15);
+        ctx.fillText(open ? '×' : '+', bx, by + 1);
+        roomHits.push({ x: sx, y: sy, w: sw, h: sh, act: () => toggleSeat(i), key: `seat${i}` });
       }
-      y += n ? 46 : 20;
-      line('Move with the stick · A grab / put / use · hold X to chop, rinse, scrape · B dash', 12, 600, '#5d584f', 22);
-      line('When everyone has voted, the team picks the kitchen together', 12, 600, '#9a9286', 24);
-      line(n ? (need ? `${need} more vote${need > 1 ? 's' : ''} to go on now (tap “Vote to start”)` : 'Here we go…') : 'Up to 4 chefs. Walk around and practise while you wait.', 13, 600, '#5d584f');
+      y = sy + sh + 16;
+      // room size, AI level, start now
+      const ph = 30, row = [
+        { t: '2 chefs', w: 76, on: roomSize === 2, act: () => setRoomSize(2), key: 'size2' },
+        { t: '4 chefs', w: 76, on: roomSize === 4, act: () => setRoomSize(4), key: 'size4' },
+        { t: 'Easy AI', w: 78, on: level === 'easy', act: () => setLevel('easy'), key: 'easy' },
+        { t: 'Hard AI', w: 78, on: level === 'hard', act: () => setLevel('hard'), key: 'hard' },
+        { t: hub.players.size ? '▶ Start now · F' : '▶ Watch AI cook · F', w: 150, on: true, act: forceStart, key: 'start' },
+      ];
+      const total = row.reduce((s, p) => s + p.w, 0) + 8 * (row.length - 1) + 16;
+      const lines = total > rw ? [row.slice(0, 4), row.slice(4)] : [row];
+      for (const r of lines) {
+        const tw = r.reduce((s, p) => s + p.w, 0) + 8 * (r.length - 1) + (r.length > 2 ? 16 : 0);
+        let px = cx - tw / 2;
+        r.forEach((p, k) => { pill(ctx, px, y, p.w, ph, p.t, p.on, p.act, p.key); px += p.w + (k === 1 || k === 3 ? 16 : 8); });
+        y += ph + 8;
+      }
+      y += 12;
+      line('Move with the stick · A grab / put / use · hold X to chop, rinse, scrape · B dash', 12, 600, '#5d584f', 20);
+      line('Host: 1–4 seats · R room size · L AI level · F start now', 11, 600, '#9a9286', 22);
+      const watching = hub.players.size - humans;
+      line(humans ? (need ? `${need} more vote${need > 1 ? 's' : ''} to go on now (tap “Vote to start”)` : 'Here we go…')
+        : 'Phones take a seat as they join; AI chefs cook in the other open seats.', 13, 600, '#5d584f', 20);
+      if (watching > 0) line(`${watching} watching: the kitchen is full (${roomSize} chefs)`, 12, 600, '#9a9286', 20);
     }
     // Changes the kitchen: in the room it swaps the practice kitchen (the smoke test
     // uses this), in the pick it moves the highlight.
@@ -1276,13 +1503,16 @@ MabarGames.register({
 
     function drawOver(ctx) {
       const s = stars();
-      const p = par(Math.max(1, chefs.size));
+      const p = Math.round(par(teamSize()));
+      const { humans, ai } = lineup();
+      const aiServed = [...chefs.values()].filter((c) => c.ai).reduce((n, c) => n + (c.served || 0), 0);
       card(ctx, [
         { t: 'SHIFT OVER!', s: 30, w: 800, c: '#ff4b3e' },
         { t: '★'.repeat(s) + '☆'.repeat(3 - s), s: 40, w: 800, c: '#ffb020' },
         { t: `${score} points  (3 stars at ${p})`, s: 22, w: 800, c: '#222' },
         { t: `${served} served · ${failed} missed · best combo ×${bestCombo}`, s: 15 },
-        { t: `Back to the kitchen in ${Math.ceil(phaseT)}…`, s: 14, c: '#7a7368' },
+        ...(ai ? [{ t: `${humans} chef${humans === 1 ? '' : 's'} + ${ai} AI (${AI.LEVELS[level].name}) · the AI served ${aiServed}`, s: 13, c: '#5d584f' }] : []),
+        { t: demo && !hub.players.size ? `Next AI shift in ${Math.ceil(phaseT)}…` : `Back to the kitchen in ${Math.ceil(phaseT)}…`, s: 14, c: '#7a7368' },
       ]);
     }
 
@@ -1318,28 +1548,50 @@ MabarGames.register({
 
     toRoom();
 
-    // Host-screen mouse on the pick: hover shows, a click highlights, a second click
-    // confirms (the keyboard goes through the keyboard player: ← → and Enter / Space).
+    // Host-screen mouse: on the pick, hover shows, a click highlights, a second click
+    // confirms (the keyboard goes through the keyboard player: ← → and Enter / Space);
+    // in the room, the seats and buttons of the room card.
     const arena = document.querySelector('#arena');
+    const roomHit = (e) => roomHits.find((h) => e.clientX >= h.x && e.clientX <= h.x + h.w && e.clientY >= h.y && e.clientY <= h.y + h.h) || null;
     const onMove = (e) => {
       pickHover = phase === 'pick' ? pickHit(e) : -1;
-      arena.style.cursor = pickHover >= 0 ? 'pointer' : '';
+      hoverHit = phase === 'room' ? roomHit(e) : null;
+      arena.style.cursor = pickHover >= 0 || hoverHit ? 'pointer' : '';
     };
     const onClick = (e) => {
+      if (phase === 'room') { const h = roomHit(e); if (h) h.act(); return; }
       if (phase !== 'pick') return;
       const i = pickHit(e);
       if (i < 0) return;
       if (i === pickSel) confirmPick(); else selectCard(i);
     };
+    // Host keys (not the keyboard chef's): F start now / leave the AI demo, 1-4 seats,
+    // R room size, L the AI level.
+    const onKey = (e) => {
+      if (e.repeat || (e.target && /INPUT|TEXTAREA/.test(e.target.tagName))) return;
+      if (e.code === 'KeyF') { if (phase === 'room') forceStart(); else if (demo) toRoom(); }
+      else if (phase === 'room' && /^Digit[1-4]$/.test(e.code)) toggleSeat(Number(e.code.slice(5)) - 1);
+      else if (phase === 'room' && e.code === 'KeyR') setRoomSize(roomSize === 4 ? 2 : 4);
+      else if (e.code === 'KeyL') setLevel(level === 'easy' ? 'hard' : 'easy');
+    };
     arena.addEventListener('pointermove', onMove);
     arena.addEventListener('click', onClick);
+    window.addEventListener('keydown', onKey);
+
+    // A chef's buttons, from a phone or an AI chef's brain alike.
+    function act(ch, bits) {
+      if (bits & B.A) { if (phase === 'over') return; interact(ch); }
+      if (bits & B.X) work(ch, 0.2);
+      if (bits & B.B && ch.dashCd <= 0 && (phase === 'play' || phase === 'room')) { ch.dash = DASH; ch.dashCd = DASH_CD; rumble(ch, 10); }
+    }
 
     return {
-      start() { for (const p of hub.players.values()) addChef(p); hub.showLobby(false, false); },
+      start() { seatChefs(); hub.showLobby(false, false); },
       stop() {
         stopped = true;
         arena.removeEventListener('pointermove', onMove);
         arena.removeEventListener('click', onClick);
+        window.removeEventListener('keydown', onKey);
         hub.showLobby(true);
         for (const o of chefObjs.values()) if (o.ch) o.ch.dispose();
         teardownPick();
@@ -1347,8 +1599,8 @@ MabarGames.register({
         if (scene) scene.clear();
         if (renderer) renderer.dispose_();
       },
-      join(p) { addChef(p); },
-      leave(p) { votes.delete(p.id); pickNav.delete(p.id); removeChef(p.id); },
+      join() { demo = false; seatChefs(); },
+      leave(p) { votes.delete(p.id); pickNav.delete(p.id); seatChefs(); },
 
       press(p, bits) {
         const ch = chefs.get(p.id);
@@ -1359,9 +1611,7 @@ MabarGames.register({
           if (bits & B.A) confirmPick();
           return;
         }
-        if (bits & B.A) { if (phase === 'over') return; interact(ch); }
-        if (bits & B.X) work(ch, 0.2);
-        if (bits & B.B && ch.dashCd <= 0 && (phase === 'play' || phase === 'room')) { ch.dash = DASH; ch.dashCd = DASH_CD; rumble(ch, 10); }
+        act(ch, bits);
       },
       action(p) {
         if (phase === 'pick') { if (chefs.has(p.id)) confirmPick(); return; }
@@ -1376,7 +1626,7 @@ MabarGames.register({
       },
       hint(p) {
         const ch = chefs.get(p.id);
-        if (!ch) return 'Kitchen is full — watch and join next shift';
+        if (!ch) return `Kitchen is full (${roomSize} chefs) — watch and join next shift`;
         if (phase === 'pick') return '← → pick the kitchen · A to confirm';
         if (phase === 'over') return 'Shift over!';
         const h = ch.hold;
@@ -1401,10 +1651,11 @@ MabarGames.register({
       resize() { if (renderer) { renderer.setSize(hub.W, hub.H, false); placeCamera(); aimPickCam(true); } },
 
       update(dt) {
+        frameNo++;
         for (let i = popups.length - 1; i >= 0; i--) { popups[i].t += dt; if (popups[i].t > 1.3) popups.splice(i, 1); }
         for (let i = bell.length - 1; i >= 0; i--) { bell[i].t += dt; if (bell[i].t > 1.6) bell.splice(i, 1); }
         if (phase === 'room') {
-          for (const p of hub.players.values()) addChef(p);
+          seatChefs();
           if (hub.players.size) {
             roomT -= dt;
             const allVoted = [...hub.players.keys()].every((id) => votes.has(id));
@@ -1426,7 +1677,7 @@ MabarGames.register({
         } else if (phase === 'play') {
           shiftT += dt;
           nextOrderT -= dt;
-          const pace = paceFor(chefs.size);
+          const pace = paceFor(teamSize());
           if (nextOrderT <= 0 && orders.length < pace.max) { addOrder(); nextOrderT = pace.gap * (1 - 0.25 * shiftT / SHIFT) * (0.85 + Math.random() * 0.3); }
           if (!orders.length && nextOrderT > 3) nextOrderT = 3;
           for (let i = orders.length - 1; i >= 0; i--) {
@@ -1444,7 +1695,10 @@ MabarGames.register({
           if (shiftT >= SHIFT) endShift();
         } else if (phase === 'over') {
           phaseT -= dt;
-          if (phaseT <= 0) toRoom();
+          if (phaseT <= 0) {
+            if (demo && !hub.players.size) { switchKitchen(MAP_IDS[(MAP_IDS.indexOf(mapId) + 1) % MAP_IDS.length]); startShift(); }   // the AI demo goes on, next kitchen
+            else toRoom();
+          }
         }
 
         // pots and fryers cook during the shift (and in practice)
@@ -1461,18 +1715,25 @@ MabarGames.register({
           }
         }
 
-        // movement (frozen during the countdown and the results)
+        // movement (frozen during the countdown and the results); an AI chef's brain gives
+        // its stick and buttons here, and they go the same way as a phone's
         const canMove = phase === 'room' || phase === 'play';
-        for (const [id, ch] of chefs) {
-          const p = hub.players.get(id);
+        for (const [id, ch] of [...chefs]) {
           ch.working = Math.max(0, ch.working - dt);
           ch.dashCd = Math.max(0, ch.dashCd - dt);
+          let p = hub.players.get(id);
+          if (ch.ai) {
+            p = ch.pad = ch.ai.update(dt);
+            const pressed = p.b & ~ch.prevB;
+            ch.prevB = p.b;
+            if (pressed) act(ch, pressed);
+          }
           if (!p) continue;
           const busy = p.b & B.X && canMove && work(ch, dt);   // holding X keeps chopping (and holds you there)
           const d = canMove && !busy ? hub.dir(p) : { x: 0, y: 0 };
           const m = Math.hypot(d.x, d.y);
           let vx = 0, vz = 0;
-          if (m > 0.15) {
+          if (m > STICK_DEAD) {
             ch.fx = d.x / m; ch.fz = d.y / m;
             vx = d.x * SPEED; vz = d.y * SPEED;
           }
@@ -1538,16 +1799,32 @@ MabarGames.register({
       _debug: () => ({
         phase, map: mapId, sceneMap, score, served, failed, combo, orders: orders.map((o) => o.id + (o.variant ? ':' + o.variant : '')),
         pick: phase === 'pick' ? { sel: MAP_IDS[pickSel], cards: pickCards.length, loaded: pickCards.filter((c) => c.env).length, t: Math.round(pickT) } : null,
-        chefs: [...chefs.values()].map((c) => ({ name: c.name, x: +c.x.toFixed(2), z: +c.z.toFixed(2), hold: c.hold && itemKey(c.hold), target: (targetOf(c) || {}).ch, animal: (chefObjs.get(c.id) || {}).ch ? chefObjs.get(c.id).ch.id : 'chibi' })),
+        chefs: [...chefs.values()].map((c) => ({ id: c.id, name: c.name, ai: !!c.ai, seat: c.spawn, served: c.served, x: +c.x.toFixed(2), z: +c.z.toFixed(2), hold: c.hold && itemKey(c.hold), target: (targetOf(c) || {}).ch, animal: (chefObjs.get(c.id) || {}).ch ? chefObjs.get(c.id).ch.id : 'chibi' })),
+        platesFree: platesFree(),
         pots: tiles.flat().filter((t) => t.pot).map((t) => ({ items: t.pot.items.length, state: t.pot.state })),
         fryers: tiles.flat().filter((t) => t.fryer).map((t) => ({ item: t.fryer.item && itemKey(t.fryer.item), state: t.fryer.state })),
         boards: tiles.flat().filter((t) => t.ch === 'B').map((t) => t.item && itemKey(t.item)),
-        env: !!env, stations: stationObjs.length,
+        env: !!env, stations: stationObjs.length, log: servedLog.slice(),
       }),
       _order(key, variant = null) { addOrder({ id: key, variant }); },
       _teleport(id, c, r, fx, fz) { const ch = chefs.get(id); if (ch) { ch.x = tileX(c); ch.z = tileZ(r); ch.fx = fx; ch.fz = fz; } },
-      _give(id, type, state = 'raw', parts = null) { const ch = chefs.get(id); if (!ch) return; ch.hold = newItem(type, state); if (parts) ch.hold.parts = parts; },
+      _give(id, type, state = 'raw', parts = null) {     // a plate counts as taken from the stack, like a real one
+        const ch = chefs.get(id); if (!ch) return;
+        if (isPlate(ch.hold)) platesOut--;
+        ch.hold = newItem(type, state); if (parts) ch.hold.parts = parts;
+        if (isPlate(ch.hold)) platesOut++;
+      },
       _setMap(id) { pickMap(id); },
+      _setRoom(n) { setRoomSize(n); },
+      _setLevel(id) { setLevel(id); },
+      _toggleSeat(i) { toggleSeat(i); },
+      _forceStart() { forceStart(); },
+      _seats: () => ({ roomSize, level, demo, ...lineup(), team: +teamSize().toFixed(2), seats: [0, 1, 2, 3].slice(0, roomSize).map((i) => { const c = seatTaken(i); return c ? (c.ai ? `AI:${c.name}:${c.animal}` : `human:${c.name}:${c.animal}`) : 'closed'; }) }),
+      _ai: () => [...chefs.values()].filter((c) => c.ai).map((c) => {
+        const I = c.ai.intent();
+        return { id: c.id, name: c.name, level: c.ai.level, mode: c.ai.mode(), intent: I && I.key, at: I && I.tile ? [I.tile.c, I.tile.r] : null, served: c.served, hold: c.hold && itemKey(c.hold), lastFail: c.ai.lastFail, ...c.ai.stats };
+      }),
+      _simulate(sec, step = 1 / 30) { for (let t = 0; t < sec; t += step) this.update(step); return this._debug(); },   // logic only, no drawing
       _tick(sec) {                                           // advance cooking timers without waiting
         for (const row of tiles) for (const t of row) {
           if (t.pot && (t.pot.state === 'cooking' || t.pot.state === 'done')) t.pot.t += sec;

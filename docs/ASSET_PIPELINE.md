@@ -23,7 +23,7 @@ Rule: only files the game actually loads go in `assets/`. Everything in `assets/
 | `art/menu_scene.py` | `menu.glb` | Main-menu terrace diorama + one looping animation clip |
 | `art/sports.py` | `characters.glb`, `tennis_court.glb`, `tt_hall.glb` | Recolorable chibis (`ch_tennis`, `ch_tt`, `ch_chef`), stadium (now Tennis's fallback venue), sports hall |
 | `art/kitchen.py` | `kitchen.glb` | Cooking templates: stations (`k_*`), the eleven ingredients in every state (`i_*`), containers, the nine finished dishes (`d_*`), particles (`fx_*`), a plain fallback room |
-| `art/kitchens.py` | `kitchen_paddy.glb`, `kitchen_beach.glb`, `kitchen_city.glb` | The three cooking dioramas from `art/source/environments/cooking/`, levelled, cleared on the station tiles of `js/games/kitchens.js`, bridged, with trees, banners, boats and gulls split off or added |
+| `art/kitchens.py` | `kitchen_paddy.glb`, `kitchen_beach.glb`, `kitchen_city.glb` | The three cooking dioramas from `art/source/environments/cooking/`, levelled, cleared on the station tiles and the `clear` tiles of `js/games/kitchens.js`, bridged and decked, with trees, banners, boats and gulls split off or added |
 | `art/rig.py` | — | Rigging toolkit: FBX import, mesh repairs (`tidy_mesh`, `lift_limb`, `replace_hand`, `delete_faces`, `apply_pose_as_rest`), shared animal skeleton, skinning rules, tools (`ToolFrame`, a modelled racket split off or a generated `build_racket`, `build_paddle`), keyframing (`Anim`: body-axis rotations, `aim` with a face normal, two-bone IK `reach`, `level`, ground solver), glTF export |
 | `art/landmarks.py` | — | Joint positions measured automatically on a T-posed character mesh (`auto_joints`) |
 | `art/clips.py` | — | The eleven clips every animal gets, generated from code |
@@ -58,7 +58,7 @@ The JS finds things by name, so these are an API:
 - **Menu**: platform empties `plat_tennis`, `plat_tt`, `plat_cook`, `plat_soon`, rim meshes `rim_*`, `env_city`.
 - **Landing island** (`landing_island.glb`, read by `js/landing.js`): hotspot anchors `hot_tennis`, `hot_tt`, `hot_cook`, `hot_plaza`, `hot_entry`, `hot_airship`, `hot_clock` (empties; the pins on the page follow them); `land` (the textured landmass, with `rocks`, `fountain`, `statue`, `nets`, `windmill` and the pennant strings as children) and `rocks` are what hides a pin seen from behind; `tree_*` (origin at the trunk's base) sway, `bunt_*` meshes flutter through their morph target `wave`, `cloud_*` drift, all in JS; `islet_*`, `balloon_*`, `airship` (child `prop`), `mill`, `ball_*`, `steam_*` move in the baked clip. The fountain is at the origin, the plaza floor at y = 0, the scene about 24 m across.
 - **Kitchen templates** (`kitchen.glb`): listed in the `art/kitchen.py` docstring. Stations `k_*` with animated children (`k_board > knife`, `k_sink > water`, `k_pot > soup, lid`, `k_fryer > oil, basket`, `k_crate > label`), food `i_<ingredient>[_<state>]`, containers `i_plate / i_bowl / i_glass`, dishes `d_<recipe>`, particles `fx_steam / fx_smoke / fx_splash`; materials `soup` and `label` are tinted at runtime.
-- **Kitchens** (`kitchen_<id>.glb`, ids and tile maps in `js/games/kitchens.js`): `land`, `bridge_*`, `tree_*`, `flag_*`, `boat_*`, `bird_*`; tile (c, r) of the map sits at x = c − (cols−1)/2, glTF z = r − (rows−1)/2, floor at y = 0. The game places the templates on the station tiles itself.
+- **Kitchens** (`kitchen_<id>.glb`, ids and tile maps in `js/games/kitchens.js`): `land`, `bridge_*`, `deck_*`, `tree_*`, `flag_*`, `boat_*`, `bird_*`; tile (c, r) of the map sits at x = c − (cols−1)/2, glTF z = r − (rows−1)/2, floor at y = 0. The game places the templates on the station tiles itself.
 - Units are meters, Blender Z-up → glTF Y-up (`export_yup=True`). Courts: long axis along Blender Y, net at y = 0, playing surface at z = 0.
 
 Renaming any of these requires updating the matching lookups (`js/games/*.js`, `js/landing.js`, `js/character.js`, `js/kit3d.js`).
@@ -120,9 +120,9 @@ The court measurements are constants at the top of the script (how they were mea
 The three cooking dioramas (`art/source/environments/cooking/`, AI-generated from isometric pictures) lean back by 12–37° and carry their stations as painted boxes. The build reads each kitchen's entry in `js/games/kitchens.js` (the file is JavaScript, but the object literal is strict JSON and the script parses it) and:
 
 1. **Levels** the model with the plane fitted through the counter bottoms (`level.plane`, `level.floor`), scales it so a counter pitch is one metre (`scale`) and centres it on the tile grid (`x0`, `y0`: where tile (0,0)'s top-left corner falls in the levelled model). These numbers were fitted once with a scratch script and are stored, so the grid never drifts.
-2. **Removes** every loose piece whose centre lies on a station, counter or bridge tile (the game puts its own templates there), small props (< 0.8 m) on walkable tiles, pieces straddling bridge tiles, and whatever stood on a removed piece.
+2. **Removes** every loose piece whose centre lies on a station, counter or bridge tile (the game puts its own templates there), small props (< 0.8 m) on walkable tiles, pieces straddling bridge tiles, every piece (< 2.6 m) on the kitchen's `clear` tiles, and whatever stood on a removed piece. `clear` (added 2026-10-29) lists, by hand, the tiles where the source painted stoves, woks and food crates that do nothing in the game: next to the real crates they read as stations or crates a chef should be able to use, and on Paddy Field and Pontianak some stood on walkable tiles, so chefs walked through them.
 3. **Flattens** the ground under walkable and station tiles to z = 0 (vertices within 0.3 m of it).
-4. **Adds** plank bridges with rails on `=` tiles (oriented by the walkable neighbours) and, on the beach, two gulls.
+4. **Adds** plank bridges with rails on `=` tiles (oriented by the walkable neighbours), a plank deck (`deck_*`) on every walkable tile that has no ground under it (5 rays down, 2 or more missing: Paddy Field had a walkway over a gap, the Beach five tiles at the island's edge) or that is on the `clear` list (the AI texture keeps a painted footprint of what stood there, e.g. a blue stove base that read as water), and, on the beach, two gulls. Re-colouring the scarred floor faces from clean ground was tried and dropped: the ground is a few huge triangles, so it repainted metres around the tile.
 5. **Splits off** trees (`tree_*`), banners (`flag_*`, morph target `wave`) and boats (`boat_*`, big deep pieces afloat on scenery tiles; they rock in a 16 s baked loop).
 
 Painted water stays painted: a translucent ripple sheet built from the ground's blue faces turned into blue blocks, because the low-poly ground triangles mix water and land. `--preview` renders an overview, an oblique view and a top view per kitchen. Re-fit the grid (and the constants) only if a source model is replaced.
@@ -151,7 +151,7 @@ The source model (`art/source/environments/landingpage/`, an AI-generated FBX: o
 | `island_court.glb` | ~2.2 MB | ~7k island; ~85k in the crowd, palms, stands, pennants, sea, gulls and clouds (~290 nodes) | 2048² JPEG |
 | `tennis_court.glb` (fallback) | ~1 MB | — | none |
 | `landing_island.glb` | ~1.26 MB | ~27k (11k landmass, the rest undersides, props, clouds, 80 meshes) | 2048² JPEG |
-| `kitchen.glb` | ~330 KB | 54 templates | none |
-| `kitchen_paddy.glb`, `kitchen_beach.glb`, `kitchen_city.glb` | 845–870 KB | 4–5k each | 2048² JPEG |
+| `kitchen.glb` | ~340 KB | 56 templates | none |
+| `kitchen_paddy.glb`, `kitchen_beach.glb`, `kitchen_city.glb` | 840–890 KB | 4–5k each | 2048² JPEG |
 
 Each character's eleven clips take ~56 KB together (sampled every frame, 27 bones, meshopt; measured with `gltf-transform inspect`).

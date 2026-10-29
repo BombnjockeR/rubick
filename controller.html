@@ -113,9 +113,11 @@
     <button id="tapSwing" class="m-tap">No motion sensor? Tap here to swing (left, middle or right)</button>
   </main>
 
-  <div id="rotate" class="rotate" hidden>
-    <div class="phone-icon" aria-hidden="true"></div>
-    <p>Turn your phone sideways</p>
+  <!-- Lost the screen for a moment: the pad stays underneath, inputs are released -->
+  <div id="reconn" class="reconn" hidden role="status" aria-live="polite">
+    <div class="spinner" aria-hidden="true"></div>
+    <p id="reconnMsg">Reconnecting…</p>
+    <button id="reconnStop" class="reconn-stop">Stop</button>
   </div>
 
   <script src="vendor/peerjs.min.js"></script>

@@ -21,15 +21,15 @@ npm run assets:island               # rebuild island_court.glb, the tennis islan
 npm run assets:kitchens             # rebuild kitchen.glb (station and food templates) and the three kitchen_*.glb dioramas
 npm run assets:landing              # rebuild landing_island.glb, the landing page's island (same requirements)
 npm run assets                      # rebuild every assets/*.glb (BLENDER=/path or BPY=python3.13 to choose Blender)
-npm run smoke                       # with `npm run dev` running: headless-Chrome smoke test (--full plays whole matches)
+npm run smoke                       # with `npm run dev` running: headless-Chrome smoke test (--full plays whole matches, --only <section>)
 ```
 
-There is no unit test suite, linter or build step for the code. `node --check <file>` catches syntax errors; `npm run smoke` covers the characters (clips, poses, foot sliding), the racket games' waiting room, both racket games, the three kitchens (one recipe through every station, burning, expiring orders), asset fallbacks and every page (`--only cooking` runs one section).
+There is no unit test suite, linter or build step for the code. `node --check <file>` catches syntax errors; `npm run smoke` covers the characters (clips, poses, foot sliding), the racket games' waiting room, both racket games, the three kitchens (one recipe through every station, burning, expiring orders), the AI chefs (lineups, Easy vs Hard, blocked stations and lanes), the phone controller (layouts, touch, a real phone-to-screen session over PeerJS, so it needs the internet), asset fallbacks and every page (`--only cooking`, `--only ai`, `--only controller` run one section).
 
 ## Code conventions
 
 - Classic `<script>` tags, no modules. Each file is an IIFE or registers onto a global: `MABAR`, `MabarGames` (js/common.js), `Kit3D` (js/kit3d.js), `MabarChars` (js/character.js, after kit3d), `MabarRacket` (js/games/racket.js), `THREE` (vendor bundle). **Script order in the HTML matters.**
-- A game is one file in `js/games/` calling `MabarGames.register({...})`, plus a `<script>` tag in `play.html` before `js/screen.js`. Racket sports are configs passed to `MabarRacket.define`. Cooking's kitchens are data in `js/games/kitchens.js` (`MabarKitchens`, strict JSON inside: `art/kitchens.py` parses it), loaded before `cooking.js`.
+- A game is one file in `js/games/` calling `MabarGames.register({...})`, plus a `<script>` tag in `play.html` before `js/screen.js`. Racket sports are configs passed to `MabarRacket.define`. Cooking's kitchens are data in `js/games/kitchens.js` (`MabarKitchens`, strict JSON inside: `art/kitchens.py` parses it) and its AI chefs are `js/games/chefai.js` (`MabarChefAI`), both loaded before `cooking.js`. AI chefs play only through the stick and buttons cooking.js feeds like a phone's; keep it that way.
 - 2-space indent, single quotes, semicolons, `'use strict'` inside IIFEs. Python (art/) uses 4 spaces.
 - Comments explain *why* or describe the gameplay rule; keep that density, not more.
 - World units are meters, three.js Y-up (Blender Z-up, converted on glTF export).

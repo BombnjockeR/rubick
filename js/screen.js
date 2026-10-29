@@ -111,11 +111,15 @@
   }
 
   // ---------- Players ----------
-  function freeSlot() {
+  function freeSlot(want = -1) {
     const used = new Set([...hub.players.values()].map((p) => p.slot));
+    if (want >= 0 && !used.has(want)) return want;
     for (let i = 0; i < R.MAX_PLAYERS; i++) if (!used.has(i)) return i;
     return -1;
   }
+  // The slot each phone (by its controller id) last had: one that drops out and comes
+  // back after the screen noticed gets its colour and animal back.
+  const slotOfCid = new Map();
 
   function cleanName(raw, slot) {
     const n = String(raw || '').replace(/\s+/g, ' ').trim().slice(0, 12);
@@ -153,13 +157,21 @@
 
   const clamp1 = (v) => Math.max(-1, Math.min(1, Number(v) || 0));
 
-  function applyInput(p, x, y, b) {
+  // s: the phone's message number (newer phones): a late or repeated one is dropped.
+  // Buttons that were held when the phone went quiet (`mute`, see the loop) don't count
+  // as pressed again when it comes back; they do once released.
+  function applyInput(p, x, y, b, s) {
+    if (s != null) {
+      if (Number(s) <= (p.seq || 0)) return;
+      p.seq = Number(s);
+    }
     const prev = p.b;
     p.sx = clamp1(x);
     p.sy = clamp1(y);
     p.b = (b | 0) & 0xfff;
     p.lastInput = performance.now();
-    const pressed = p.b & ~prev;
+    let pressed = p.b & ~prev;
+    if (p.mute) { pressed &= ~p.mute; p.mute &= p.b; }
     if (pressed && game && game.press) game.press(p, pressed);
     if (p.b !== prev) rosterDirty = true;
   }
@@ -240,30 +252,57 @@
     });
   }
 
+  // A player is keyed by its first connection's id for good (games keep it); a phone
+  // that reconnects with the same controller id (`cid`, newer phones) takes its player
+  // back on the new connection, with its seat, chef and score, instead of becoming a
+  // second player. Messages and close events from a replaced connection are ignored.
   function onConnection(conn) {
     const meta = conn.metadata || {};
     if (meta.role === 'viewer') { onViewer(conn); return; }
+    const cid = typeof meta.cid === 'string' ? meta.cid.slice(0, 40) : '';
     conn.on('open', () => {
-      const slot = freeSlot();
+      const back = cid && [...hub.players.values()].find((p) => p.cid === cid);
+      if (back) { reattach(back, conn); return; }
+      const slot = freeSlot(cid && slotOfCid.has(cid) ? slotOfCid.get(cid) : -1);
       if (slot < 0) {
         conn.send({ t: 'full' });
         setTimeout(() => conn.close(), 400);
         return;
       }
       const p = addPlayer(conn.peer, slot, meta.name, conn, !!meta.remote);
-      hub.send(p, { t: 'welcome', slot, color: p.color, colorName: p.colorName, name: p.name, code });
-      hub.send(p, { t: 'mode', mode: controlMode() });
+      p.cid = cid;
+      if (cid) slotOfCid.set(cid, slot);
+      conn.mabarId = p.id;
+      greet(p);
     });
-    conn.on('data', (msg) => onMessage(conn.peer, msg));
-    conn.on('close', () => removePlayer(conn.peer));
-    conn.on('error', () => removePlayer(conn.peer));
+    conn.on('data', (msg) => { const p = hub.players.get(conn.mabarId); if (p && p.conn === conn) onMessage(p, msg); });
+    const gone = () => { const p = hub.players.get(conn.mabarId); if (p && p.conn === conn) removePlayer(p.id); };
+    conn.on('close', gone);
+    conn.on('error', gone);
   }
 
-  function onMessage(id, msg) {
-    const p = hub.players.get(id);
+  function greet(p) {
+    hub.send(p, { t: 'welcome', slot: p.slot, color: p.color, colorName: p.colorName, name: p.name, code });
+    hub.send(p, { t: 'mode', mode: controlMode() });
+  }
+
+  function reattach(p, conn) {
+    const old = p.conn;
+    p.conn = conn;
+    conn.mabarId = p.id;
+    p.sx = 0; p.sy = 0; p.b = 0; p.mute = 0; p.seq = 0;
+    p.lastInput = performance.now();
+    p.hintSent = null;
+    p.actionSent = null;
+    if (old && old !== conn) { try { old.close(); } catch (_) { /* already gone */ } }
+    greet(p);
+    rosterDirty = true;
+  }
+
+  function onMessage(p, msg) {
     if (!p || !msg || typeof msg !== 'object') return;
     switch (msg.t) {
-      case 'in': applyInput(p, msg.x, msg.y, msg.b); break;
+      case 'in': applyInput(p, msg.x, msg.y, msg.b, msg.s); break;
       case 'ping': hub.send(p, { t: 'pong', ts: msg.ts }); break;
       case 'rtt': p.rtt = Math.round(Number(msg.ms) || 0); break;
       case 'swing':   // power 0..1; dx / dy (-1..1, optional) = which way the phone moved
@@ -486,9 +525,10 @@
     const dt = Math.min(0.1, (now - last) / 1000); // cap so a hiccup doesn't teleport things
     last = now;
 
-    // A phone that went to sleep shouldn't keep steering.
+    // A phone that went quiet (asleep, or the link stalled) shouldn't keep steering or
+    // holding a button; it sends at least four times a second while connected.
     for (const p of hub.players.values()) {
-      if (p.conn && now - p.lastInput > 1500 && (p.sx || p.sy || p.b)) { p.sx = 0; p.sy = 0; p.b = 0; }
+      if (p.conn && now - p.lastInput > 1500 && (p.sx || p.sy || p.b)) { p.mute = p.b; p.sx = 0; p.sy = 0; p.b = 0; }
     }
 
     if (game) {

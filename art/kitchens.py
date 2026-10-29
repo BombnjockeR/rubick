@@ -9,15 +9,19 @@ For every kitchen in kitchens.js this build:
   levels    the model (the fitted ground plane becomes horizontal), scales it so a
             counter pitch is one metre and centres it on the tile grid
   removes   whatever stands on station, counter and bridge tiles (the painted
-            stations: the game puts its own templates from kitchen.glb there) and
+            stations: the game puts its own templates from kitchen.glb there),
             small props on the walkways (rocks, baskets, posts a chef would trip on)
+            and anything standing on the map's `clear` tiles (painted stoves and
+            food crates that would read as stations, or stand where chefs walk)
   flattens  the ground under the walkable and station tiles to z = 0
-  adds      plank bridges over the water on `=` tiles, gulls on the beach
+  adds      plank bridges over the water on `=` tiles, a plank deck (deck_*) on any
+            walkable tile the model has no ground under or that was cleared (the
+            texture keeps a painted footprint of what stood there), gulls on the beach
   splits    trees (tree_*) and banners (flag_*, morph target "wave") for the wind,
             boats (boat_*) that rock in a 16 s baked loop
 Output: Blender Z-up -> glTF Y-up, meters; tile (c, r) of the map sits at
 x = c - (cols-1)/2, Blender y = (rows-1)/2 - r (glTF z = r - (rows-1)/2), floor at 0.
-Nodes: land, bridge_*, tree_*, flag_*, boat_*, bird_* (beach).
+Nodes: land, bridge_*, deck_*, tree_*, flag_*, boat_*, bird_* (beach).
 """
 import json
 import math
@@ -30,6 +34,7 @@ import bmesh  # noqa: E402
 import bpy  # noqa: E402
 import numpy as np  # noqa: E402
 from mathutils import Matrix, Vector  # noqa: E402
+from mathutils.bvhtree import BVHTree  # noqa: E402
 import rig  # noqa: E402
 import rlib  # noqa: E402
 from rlib import Geo, mat, key  # noqa: E402
@@ -130,6 +135,7 @@ def build(kid, k):
         return col[1] > col[0] * 1.04 and col[1] > col[2] * 1.15
 
     # ------------------------------------------------------------- removals
+    CLEAR = {tuple(t) for t in k.get('clear', [])}
     kill, why = set(), {}
     for p in others:
         c, r = tile_of(p['c'][0], p['c'][1])
@@ -139,6 +145,8 @@ def build(kid, k):
             kill.add(p['id']); why[p['id']] = f'on {ch}'
         elif ch == '=' and fp < 3.5:
             kill.add(p['id']); why[p['id']] = 'bridge'
+        elif (c, r) in CLEAR and fp < 2.6:                          # its base too: a walkway left bare gets a deck
+            kill.add(p['id']); why[p['id']] = 'clear'
         elif ch == '.' and fp < 0.8 and p['lo'][2] < 0.6 and not green(p):
             kill.add(p['id']); why[p['id']] = 'walkway'
     for p in others:                                   # bridge tiles take everything nearby too (planks straddle tiles)
@@ -271,6 +279,29 @@ def build(kid, k):
                 g.cyl(0.03, 1.0, loc, PLANK, seg=8, rot=(math.pi / 2, 0, 0) if ns else (0, math.pi / 2, 0))
             g.build(f'bridge_{nb}', loc=ctr)
             nb += 1
+
+    # ------------------------------------------------------------- decks: walkways without ground, and cleared ones
+    # (the AI texture paints a prop's footprint onto the ground under it)
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    tree = BVHTree.FromBMesh(bm)
+    bm.free()
+    holes = []
+    for r in range(ROWS):
+        for c in range(COLS):
+            if MAP[r][c] != '.':
+                continue
+            ctr = centre(c, r)
+            miss = sum(tree.ray_cast(Vector((ctr.x + ox, ctr.y + oy, 1.0)), Vector((0, 0, -1)), 1.4)[0] is None
+                       for ox, oy in ((0, 0), (0.3, 0.3), (-0.3, 0.3), (0.3, -0.3), (-0.3, -0.3)))
+            if miss >= 2 or (c, r) in CLEAR:
+                holes.append((c, r))
+    for i, (c, r) in enumerate(holes):
+        g = Geo()
+        for j in range(5):
+            g.box((1.0, 0.19, 0.1), (0, -0.4 + j * 0.2, -0.05), PLANK if j % 2 else PLANK_D, bevel=0.01)
+        g.build(f'deck_{i}', loc=centre(c, r))
+    print(f'{kid}: decked {len(holes)} walkable tiles (no ground, or cleared): {holes}')
 
     # ------------------------------------------------------------- gulls (beach)
     birds = []
